@@ -1,0 +1,12 @@
+{"id": "ai-search-market", "question": "What changed in the AI search market in the last year?", "topic_hint": "news"}
+{"id": "tavily-what", "question": "What is Tavily and what problem does it solve for AI agents?", "topic_hint": "general"}
+{"id": "rag-vs-finetune", "question": "What are the main trade-offs between RAG and fine-tuning for adapting an LLM to a domain?", "topic_hint": "general"}
+{"id": "otel-genai", "question": "What are the OpenTelemetry GenAI semantic conventions and what is their current maturity status?", "topic_hint": "general"}
+{"id": "mcp", "question": "What is the Model Context Protocol (MCP) and which companies support it?", "topic_hint": "general"}
+{"id": "agent-eval", "question": "What approaches are used to evaluate agentic LLM systems that use retrieval?", "topic_hint": "general"}
+{"id": "prompt-caching", "question": "How does prompt caching reduce cost and latency for LLM applications?", "topic_hint": "general"}
+{"id": "nvidia-rev", "question": "What were NVIDIA's most recent reported quarterly revenue and data-center segment figures?", "topic_hint": "finance"}
+{"id": "eu-ai-act", "question": "What are the key EU AI Act obligations and their compliance deadlines?", "topic_hint": "general"}
+{"id": "tavily-extract", "question": "What is the difference between Tavily Search and Tavily Extract, and when should each be used?", "topic_hint": "general"}
+{"id": "ai-funding", "question": "What notable funding rounds have AI search or web-data startups raised recently?", "topic_hint": "finance"}
+{"id": "citation-rag", "question": "What are best practices for citation and source attribution in retrieval-augmented generation?", "topic_hint": "general"}

@@ -1,0 +1,10 @@
+# Dependencies for the Vercel Python serverless function (api/ask.py).
+# Mirrors the inline deps in tavily_maxer.py. typer + rich are included because
+# tavily_maxer imports them at module load, even though the function doesn't render a CLI.
+langchain>=1.0.0
+langchain-nebius>=0.1.0
+langchain-tavily>=0.2.0
+langsmith>=0.1.0
+python-dotenv>=1.0.0
+rich>=13.0.0
+typer>=0.12.0

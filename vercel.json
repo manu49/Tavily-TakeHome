@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/ask.py": {
+      "maxDuration": 60,
+      "includeFiles": "tavily_maxer.py"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+.venv
+__pycache__
+.pytest_cache
+logs
+evals
+tests
+uv.lock
+*.pyc
+.env
+.env.local
+starter_agent.py

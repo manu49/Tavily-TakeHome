@@ -33,19 +33,52 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 import typer
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_nebius import ChatNebius
 from langchain_tavily import TavilySearch
+from pydantic import PrivateAttr
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
 
 load_dotenv()
+
+
+class FixedChatNebius(ChatNebius):
+    """Works around a Nebius/vLLM streaming bug in gpt-oss models: the final
+    argument fragment of a tool call is sometimes reported under a new
+    `index` instead of the one it belongs to. LangChain merges tool_call
+    chunks by index, so the stray fragment turns into a second, malformed
+    tool call (no id/name) that the API rejects on the next turn. Chunks
+    with no id/name are re-attached to the most recently started tool call
+    instead of trusting the server-reported index.
+    """
+
+    _active_tool_call_index: Optional[int] = PrivateAttr(default=None)
+
+    def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+        generation_chunk = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        if generation_chunk is None:
+            return generation_chunk
+
+        tool_call_chunks = getattr(generation_chunk.message, "tool_call_chunks", None)
+        if not tool_call_chunks:
+            return generation_chunk
+
+        for tool_call_chunk in tool_call_chunks:
+            if tool_call_chunk.get("id"):
+                self._active_tool_call_index = tool_call_chunk.get("index")
+            elif self._active_tool_call_index is not None:
+                tool_call_chunk["index"] = self._active_tool_call_index
+
+        return generation_chunk
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -158,7 +191,7 @@ def main(
 
     question_text = " ".join(question)
 
-    chat_model = ChatNebius(model=model, streaming=True)
+    chat_model = FixedChatNebius(model=model, streaming=True)
     search_tool = TavilySearch()
 
     agent = create_agent(

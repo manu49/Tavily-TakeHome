@@ -22,9 +22,9 @@ exercises the real agent (Tavily web search + Nebius model + citation validation
 mock. No web framework is added: this runs on the Python standard library `http.server`
 so the project's dependency footprint is unchanged.
 
-The page itself lives in `index.html`, which is shared with the Vercel deployment (see
-`api/ask.py` + `vercel.json`). This server and the serverless function both POST to the
-same `/api/ask` endpoint, so the same front end works in both places.
+The page (the `PAGE` HTML constant below) and the WSGI `app` are both defined here, so the
+whole demo is one self-contained file with no external asset to bundle — the local dev
+server and the Vercel deployment serve the exact same front end and POST to `/api/ask`.
 
 Run:
     uv run webapp.py            # then open http://127.0.0.1:8000
@@ -43,7 +43,6 @@ import json
 import os
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -51,9 +50,6 @@ import tavily_maxer as tm
 
 load_dotenv()
 load_dotenv(".env.local", override=False)
-
-INDEX_PATH = Path(__file__).resolve().parent / "index.html"
-
 
 # --------------------------------------------------------------------------------------
 # Agent bridge: turn a question into a JSON-serializable result the page can render.
@@ -86,7 +82,7 @@ def shape_result(result: "tm.RunResult") -> dict:
 
 
 def load_page() -> bytes:
-    return INDEX_PATH.read_bytes()
+    return PAGE.encode("utf-8")
 
 
 # --------------------------------------------------------------------------------------
@@ -229,6 +225,306 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[webapp] shutting down.")
         server.shutdown()
+
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tavily_maxer — grounded web research</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #121a30;
+    --panel-2: #0e1528;
+    --border: #233055;
+    --text: #e8ecf6;
+    --muted: #93a0bd;
+    --accent: #4f7cff;
+    --accent-2: #36d6c3;
+    --good: #2bd576;
+    --bad: #ff6b6b;
+    --chip: #1a2444;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 15% -10%, #16224a, transparent),
+                radial-gradient(1000px 600px at 100% 0%, #122044, transparent),
+                var(--bg);
+    color: var(--text);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 56px 20px 96px; }
+  header { text-align: center; margin-bottom: 36px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 14px; margin-bottom: 20px; background: var(--panel-2);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); box-shadow: 0 0 10px var(--accent-2); }
+  h1 { font-size: 40px; line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; }
+  h1 .grad { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: var(--muted); font-size: 17px; max-width: 620px; margin: 0 auto; }
+  form {
+    margin-top: 28px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 14px; display: flex; gap: 10px;
+    box-shadow: 0 20px 50px -20px rgba(0,0,0,.6);
+  }
+  textarea {
+    flex: 1; resize: none; background: transparent; color: var(--text);
+    border: none; outline: none; font: inherit; padding: 8px 6px; min-height: 26px; max-height: 180px;
+  }
+  textarea::placeholder { color: #5e6b8a; }
+  button.ask {
+    align-self: flex-end; background: linear-gradient(90deg, var(--accent), #6a5cff);
+    color: white; border: none; border-radius: 10px; padding: 11px 20px;
+    font-weight: 600; font-size: 15px; cursor: pointer; transition: transform .05s ease, opacity .2s;
+    white-space: nowrap;
+  }
+  button.ask:hover { transform: translateY(-1px); }
+  button.ask:disabled { opacity: .5; cursor: default; transform: none; }
+  .examples { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .chip {
+    font-size: 13px; color: var(--muted); background: var(--chip);
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+
+  .status { margin-top: 28px; text-align: center; color: var(--muted); display: none; }
+  .status.show { display: block; }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    display: inline-block; vertical-align: -3px; margin-right: 8px;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .results { margin-top: 32px; display: none; }
+  .results.show { display: block; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 22px 24px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 14px; }
+  .answer { font-size: 16.5px; line-height: 1.7; }
+  .answer h1, .answer h2, .answer h3 { font-size: 19px; margin: 18px 0 8px; }
+  .answer p { margin: 0 0 12px; }
+  .answer ul, .answer ol { margin: 0 0 12px; padding-left: 22px; }
+  .answer code { background: #0c1430; padding: 1px 6px; border-radius: 5px; font-size: 14px; }
+  .cite {
+    display: inline-block; font-size: 12px; font-weight: 700; line-height: 1;
+    color: var(--accent-2); background: rgba(54,214,195,.12);
+    border: 1px solid rgba(54,214,195,.3); border-radius: 6px;
+    padding: 2px 6px; margin: 0 2px; cursor: pointer; text-decoration: none; vertical-align: 1px;
+  }
+  .cite:hover { background: rgba(54,214,195,.22); }
+
+  .src { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+  .src:first-of-type { border-top: none; }
+  .src .num {
+    flex: none; width: 26px; height: 26px; border-radius: 7px; font-size: 13px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent-2); background: rgba(54,214,195,.12); border: 1px solid rgba(54,214,195,.3);
+  }
+  .src .meta { min-width: 0; }
+  .src .title { font-weight: 600; }
+  .src a { color: var(--accent); text-decoration: none; font-size: 13px; word-break: break-all; }
+  .src a:hover { text-decoration: underline; }
+  .src.target { animation: flash 1.4s ease; }
+  @keyframes flash { 0% { background: rgba(79,124,255,.18); } 100% { background: transparent; } }
+
+  .badge-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .vbadge { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; padding: 8px 14px; border-radius: 10px; }
+  .vbadge.ok { color: var(--good); background: rgba(43,213,118,.1); border: 1px solid rgba(43,213,118,.3); }
+  .vbadge.fail { color: var(--bad); background: rgba(255,107,107,.1); border: 1px solid rgba(255,107,107,.3); }
+  .stat { font-size: 13px; color: var(--muted); }
+  .stat b { color: var(--text); font-weight: 600; }
+
+  .error { color: var(--bad); background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.3); border-radius: 12px; padding: 16px 18px; }
+  footer { text-align: center; color: #4f5d7e; font-size: 13px; margin-top: 40px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="badge"><span class="dot"></span> Powered by Tavily web search · Nebius · LangChain</div>
+      <h1>tavily<span class="grad">_maxer</span></h1>
+      <p class="sub">Ask anything. Get a research answer where <b>every claim traces to a real
+      retrieved source</b> — citations are validated, not improvised.</p>
+    </header>
+
+    <form id="form">
+      <textarea id="q" placeholder="What changed in the AI search market this year?" rows="1"></textarea>
+      <button class="ask" id="ask" type="submit">Search</button>
+    </form>
+
+    <div class="examples" id="examples">
+      <span class="chip">What changed in the AI search market this year?</span>
+      <span class="chip">Who won the most recent Nobel Prize in Physics?</span>
+      <span class="chip">Compare the latest flagship phones from Apple and Google.</span>
+      <span class="chip">What are the newest features in Python 3.13?</span>
+    </div>
+
+    <div class="status" id="status"><span class="spinner"></span><span id="statusText">Searching the web and grounding the answer…</span></div>
+
+    <div class="results" id="results">
+      <div class="card">
+        <h2>Answer</h2>
+        <div class="answer" id="answer"></div>
+      </div>
+      <div class="card" id="sourcesCard">
+        <h2>Sources</h2>
+        <div id="sources"></div>
+      </div>
+      <div class="card">
+        <h2>Verification</h2>
+        <div class="badge-row">
+          <span id="vbadge"></span>
+          <span class="stat" id="stats"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="results" id="errorBox">
+      <div class="error" id="errorText"></div>
+    </div>
+
+    <footer>Reuses the same validated agent path as the CLI · sources verified against Tavily results</footer>
+  </div>
+
+<script>
+const form = document.getElementById('form');
+const q = document.getElementById('q');
+const askBtn = document.getElementById('ask');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const results = document.getElementById('results');
+const errorBox = document.getElementById('errorBox');
+const errorText = document.getElementById('errorText');
+const answerEl = document.getElementById('answer');
+const sourcesEl = document.getElementById('sources');
+const sourcesCard = document.getElementById('sourcesCard');
+const vbadge = document.getElementById('vbadge');
+const stats = document.getElementById('stats');
+
+// auto-grow textarea
+q.addEventListener('input', () => { q.style.height = 'auto'; q.style.height = q.scrollHeight + 'px'; });
+
+document.getElementById('examples').addEventListener('click', (e) => {
+  if (e.target.classList.contains('chip')) { q.value = e.target.textContent; q.focus(); q.dispatchEvent(new Event('input')); }
+});
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Minimal, safe markdown → HTML: headings, bold/italic, inline code, lists, paragraphs.
+// Citation markers [n] are turned into clickable chips that jump to the source.
+function renderMarkdown(md) {
+  const lines = escapeHtml(md).split('\n');
+  let html = '', inList = null;
+  const inline = (t) => t
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[(\d+)\]/g, '<a class="cite" href="#src-$1" data-id="$1">$1</a>');
+  const closeList = () => { if (inList) { html += `</${inList}>`; inList = null; } };
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) { closeList(); continue; }
+    let m;
+    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) { closeList(); const n = m[1].length; html += `<h${n}>${inline(m[2])}</h${n}>`; }
+    else if ((m = line.match(/^[-*]\s+(.*)$/))) { if (inList !== 'ul') { closeList(); html += '<ul>'; inList = 'ul'; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = line.match(/^\d+\.\s+(.*)$/))) { if (inList !== 'ol') { closeList(); html += '<ol>'; inList = 'ol'; } html += `<li>${inline(m[1])}</li>`; }
+    else { closeList(); html += `<p>${inline(line)}</p>`; }
+  }
+  closeList();
+  return html;
+}
+
+function renderSources(sources, cited) {
+  if (!sources.length) { sourcesCard.style.display = 'none'; return; }
+  sourcesCard.style.display = '';
+  sourcesEl.innerHTML = sources.map(s => `
+    <div class="src" id="src-${s.id}">
+      <div class="num">${s.id}</div>
+      <div class="meta">
+        <div class="title">${escapeHtml(s.title)}</div>
+        <a href="${encodeURI(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a>
+      </div>
+    </div>`).join('');
+}
+
+// Clicking a citation chip scrolls to and flashes its source row.
+answerEl.addEventListener('click', (e) => {
+  const a = e.target.closest('.cite');
+  if (!a) return;
+  e.preventDefault();
+  const row = document.getElementById('src-' + a.dataset.id);
+  if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.remove('target'); void row.offsetWidth; row.classList.add('target'); }
+});
+
+async function ask(question) {
+  errorBox.classList.remove('show');
+  results.classList.remove('show');
+  statusEl.classList.add('show');
+  askBtn.disabled = true;
+  statusText.textContent = 'Searching the web and grounding the answer…';
+  try {
+    const res = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+
+    answerEl.innerHTML = renderMarkdown(data.answer);
+    renderSources(data.sources, data.cited_source_ids);
+
+    if (data.validation.valid) {
+      vbadge.className = 'vbadge ok';
+      vbadge.innerHTML = '&#10003; All citations verified against retrieved sources';
+    } else {
+      vbadge.className = 'vbadge fail';
+      vbadge.innerHTML = '&#10007; ' + escapeHtml((data.validation.errors || []).join('; ') || 'Citation validation failed');
+    }
+    const searches = (data.tool_calls || []).filter(c => (c.name || '').includes('search') || (c.name || '').includes('tavily')).length;
+    stats.innerHTML = `<b>${data.sources.length}</b> sources · <b>${searches}</b> web search${searches === 1 ? '' : 'es'} · <b>${data.latency_seconds}s</b> · ${escapeHtml(data.model)}`;
+
+    statusEl.classList.remove('show');
+    results.classList.add('show');
+    results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    statusEl.classList.remove('show');
+    errorText.textContent = err.message;
+    errorBox.classList.add('show');
+  } finally {
+    askBtn.disabled = false;
+  }
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const question = q.value.trim();
+  if (question) ask(question);
+});
+
+// Cmd/Ctrl+Enter submits from the textarea.
+q.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); }
+});
+</script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":

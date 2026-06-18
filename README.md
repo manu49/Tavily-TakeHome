@@ -79,15 +79,15 @@ would have no backend to call, so the demo wouldn't function.
 
 This repo is already set up for Vercel. Vercel's native Python runtime serves the whole
 deployment from one WSGI app (`app` in `webapp.py`), which handles both the page (`GET /`)
-and the agent endpoint (`POST /api/ask`) using only the standard library:
+and the agent endpoint (`POST /api/ask`) using only the standard library. The whole demo is
+one self-contained file — the page HTML is inlined in `webapp.py`, so there's no external
+asset for Vercel to bundle.
 
 | File | Role |
 |---|---|
-| [`webapp.py`](webapp.py) | Defines the WSGI `app` (Vercel entrypoint) **and** the local dev server. |
-| [`index.html`](index.html) | The page, served at `/` by both the WSGI app and the dev server. |
+| [`webapp.py`](webapp.py) | The WSGI `app` (Vercel entrypoint) + inlined page HTML + the local dev server. |
 | [`pyproject.toml`](pyproject.toml) | `[tool.vercel] entrypoint = "webapp:app"` tells Vercel which app to run. |
 | [`requirements.txt`](requirements.txt) | Dependencies Vercel installs. |
-| [`vercel.json`](vercel.json) | Sets `maxDuration` and bundles `index.html` with the function. |
 
 **Steps:**
 
@@ -117,8 +117,10 @@ vercel --prod     # production deploy
 
 **Serverless notes:** the function runs with `log=False` (Vercel's filesystem is read-only
 outside `/tmp`, so `logs/runs.jsonl` is skipped — LangSmith tracing still works via env
-vars) and `repair_attempts=1` to stay inside the 60s `maxDuration`. Cold starts take a few
-seconds because the LangChain stack is heavy; subsequent requests are warm.
+vars) and `repair_attempts=1` to keep latency bounded. Cold starts take a few seconds
+because the LangChain stack is heavy; subsequent requests are warm. If a cold-start query
+ever hits the function time limit, raise it under Project → Settings → Functions →
+**Function Max Duration**.
 
 ## Tests & evals
 

@@ -77,15 +77,17 @@ would have no backend to call, so the demo wouldn't function.
 
 ### Deploy to Vercel
 
-This repo is already set up for Vercel. The page is a static file and only the search
-endpoint runs Python:
+This repo is already set up for Vercel. Vercel's native Python runtime serves the whole
+deployment from one WSGI app (`app` in `webapp.py`), which handles both the page (`GET /`)
+and the agent endpoint (`POST /api/ask`) using only the standard library:
 
 | File | Role |
 |---|---|
-| [`index.html`](index.html) | Static page, served at `/` (also used by the local `webapp.py`). |
-| [`api/ask.py`](api/ask.py) | Python serverless function, served at `/api/ask`. Runs the real agent. |
-| [`requirements.txt`](requirements.txt) | Dependencies Vercel installs for the function. |
-| [`vercel.json`](vercel.json) | Sets `maxDuration` and bundles `tavily_maxer.py` with the function. |
+| [`webapp.py`](webapp.py) | Defines the WSGI `app` (Vercel entrypoint) **and** the local dev server. |
+| [`index.html`](index.html) | The page, served at `/` by both the WSGI app and the dev server. |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vercel] entrypoint = "webapp:app"` tells Vercel which app to run. |
+| [`requirements.txt`](requirements.txt) | Dependencies Vercel installs. |
+| [`vercel.json`](vercel.json) | Sets `maxDuration` and bundles `index.html` with the function. |
 
 **Steps:**
 

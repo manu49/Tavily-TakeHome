@@ -90,7 +90,72 @@ def load_page() -> bytes:
 
 
 # --------------------------------------------------------------------------------------
-# HTTP layer
+# WSGI app — the entrypoint used on Vercel (see [tool.vercel] in pyproject.toml).
+#
+# Vercel's native Python runtime serves the whole deployment from a single WSGI/ASGI
+# `app`, so this one callable handles both the static page (GET /) and the agent
+# endpoint (POST /api/ask) — the same routes the local dev server below exposes. It is
+# pure standard library: no framework, no extra dependency. Serverless specifics match
+# api-style constraints: log=False (read-only filesystem outside /tmp; LangSmith tracing
+# still works via env vars) and repair_attempts=1 (stay inside the function maxDuration).
+# --------------------------------------------------------------------------------------
+
+_STATUS_LINES = {
+    200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found",
+    405: "405 Method Not Allowed", 500: "500 Internal Server Error",
+}
+
+
+def _wsgi_bytes(start_response, status: int, body: bytes, content_type: str):
+    start_response(
+        _STATUS_LINES[status],
+        [("Content-Type", content_type), ("Content-Length", str(len(body)))],
+    )
+    return [body]
+
+
+def _wsgi_json(start_response, status: int, payload: dict):
+    return _wsgi_bytes(start_response, status, json.dumps(payload).encode("utf-8"), "application/json")
+
+
+def app(environ, start_response):
+    """WSGI entrypoint for Vercel (and any WSGI host)."""
+    method = environ.get("REQUEST_METHOD", "GET")
+    path = environ.get("PATH_INFO", "/") or "/"
+
+    if method == "GET" and path in ("/", "/index.html"):
+        return _wsgi_bytes(start_response, 200, load_page(), "text/html; charset=utf-8")
+    if method == "GET" and path == "/healthz":
+        return _wsgi_json(start_response, 200, {"ok": True})
+    if path != "/api/ask":
+        return _wsgi_json(start_response, 404, {"error": "not found"})
+    if method != "POST":
+        return _wsgi_json(start_response, 405, {"error": "POST a JSON body {\"question\": \"...\"}."})
+
+    try:
+        size = int(environ.get("CONTENT_LENGTH") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    raw = environ["wsgi.input"].read(size) if size > 0 else b""
+    try:
+        payload = json.loads(raw or b"{}")
+    except json.JSONDecodeError:
+        return _wsgi_json(start_response, 400, {"error": "invalid JSON body"})
+
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return _wsgi_json(start_response, 400, {"error": "Please enter a question."})
+
+    try:
+        result = tm.run_query(question, model=tm.DEFAULT_MODEL, log=False, repair_attempts=1)
+        return _wsgi_json(start_response, 200, shape_result(result))
+    except Exception as exc:
+        traceback.print_exc()
+        return _wsgi_json(start_response, 500, {"error": f"{type(exc).__name__}: {exc}"})
+
+
+# --------------------------------------------------------------------------------------
+# HTTP layer (local dev server)
 # --------------------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):

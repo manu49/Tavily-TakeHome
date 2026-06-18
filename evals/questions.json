@@ -1,0 +1,32 @@
+[
+  {
+    "id": "q1",
+    "category": "simple_factual",
+    "question": "What is the capital of France?"
+  },
+  {
+    "id": "q2",
+    "category": "recency_sensitive",
+    "question": "Who won the most recent Nobel Prize in Physics?"
+  },
+  {
+    "id": "q3",
+    "category": "recency_sensitive",
+    "question": "What changed in the AI search market this year?"
+  },
+  {
+    "id": "q4",
+    "category": "comparison_synthesis",
+    "question": "Compare the safety approaches of Anthropic's Claude and OpenAI's GPT models."
+  },
+  {
+    "id": "q5",
+    "category": "adversarial_no_source",
+    "question": "What is the airspeed velocity of an unladen swallow?"
+  },
+  {
+    "id": "q6",
+    "category": "niche_factual",
+    "question": "Who is the CEO of Tavily?"
+  }
+]

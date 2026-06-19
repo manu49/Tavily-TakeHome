@@ -12,6 +12,14 @@ dependencies = [
   "typer>=0.12.0",
 ]
 
+[project.optional-dependencies]
+portfolio = [
+    "numpy>=2.4.6",
+    "pandas>=3.0.3",
+    "scipy>=1.17.1",
+    "yfinance>=1.4.1",
+]
+
 [dependency-groups]
 dev = ["pytest>=8.0.0"]
 

@@ -439,6 +439,56 @@ def parse_structured_fallback(messages: List[Any]) -> Optional[ResearchAnswer]:
     return None
 
 
+_CODE_FENCE_RE = re.compile(r"\A```[a-zA-Z]*\n?|\n?```\Z")
+
+
+def _message_text(message: Any) -> str:
+    """Flatten an AI message's content (str, or a list of content blocks) to plain text."""
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return ""
+
+
+def coerce_research_answer(messages: List[Any]) -> Optional[ResearchAnswer]:
+    """Last-resort recovery when neither a structured response nor a clean JSON text
+    payload (parse_structured_fallback) is available.
+
+    gpt-oss-120b sometimes ignores the forced ResearchAnswer tool call entirely and just
+    answers in free-text prose. Rather than 500 the whole request, salvage that final
+    prose as the answer (lifting any inline [n] markers into cited_source_ids) so the user
+    still gets a result that goes through the normal validation/repair path. Citations are
+    still validated against the registry, so this can't smuggle in hallucinated sources --
+    a bad marker just shows up as a failed badge instead of a crash.
+
+    Kept separate from parse_structured_fallback so that function's strict, well-tested
+    JSON-only contract is unchanged.
+    """
+    for message in reversed(messages):
+        if getattr(message, "type", None) != "ai":
+            continue
+        text = _message_text(message).strip()
+        if not text:
+            continue  # skip tool-call-only AI turns; keep looking for the final prose
+        unfenced = _CODE_FENCE_RE.sub("", text).strip() if text.startswith("```") else text
+        if unfenced.startswith("{"):
+            try:
+                return ResearchAnswer.model_validate_json(unfenced)
+            except Exception:
+                pass
+        cited = sorted({int(m) for m in CITATION_MARKER_RE.findall(text)})
+        return ResearchAnswer(answer=text, cited_source_ids=cited)
+    return None
+
+
 def build_agent(model: str = DEFAULT_MODEL, *, streaming: bool = True):
     """Build a fresh agent + its (fresh) wrapped search tool. A new tool instance is
     returned each call so its SourceRegistry starts empty -- registries must not leak
@@ -558,8 +608,11 @@ def run_query(
     with collect_runs() as run_collector:
         state = agent.invoke({"messages": [{"role": "user", "content": question}]})
 
-        structured_response = state.get("structured_response") or parse_structured_fallback(
-            state.get("messages", [])
+        agent_messages = state.get("messages", [])
+        structured_response = (
+            state.get("structured_response")
+            or parse_structured_fallback(agent_messages)
+            or coerce_research_answer(agent_messages)
         )
         if structured_response is None:
             raise RuntimeError("Agent did not produce a structured ResearchAnswer.")
@@ -775,7 +828,7 @@ def main(
                                 print_tool_result(message)
 
             if structured_response is None:
-                structured_response = parse_structured_fallback(ai_messages)
+                structured_response = parse_structured_fallback(ai_messages) or coerce_research_answer(ai_messages)
 
             if structured_response is None:
                 console.print("[bold red]Agent did not produce a structured answer.[/bold red]")

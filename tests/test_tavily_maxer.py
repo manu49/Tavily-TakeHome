@@ -452,6 +452,45 @@ class TestParseStructuredFallback:
 
 
 # --------------------------------------------------------------------------------------
+# coerce_research_answer (graceful degradation when the model answers in plain prose)
+# --------------------------------------------------------------------------------------
+
+class TestCoerceResearchAnswer:
+    def test_wraps_plain_prose_and_lifts_inline_markers(self):
+        messages = [AIMessage(content="SpaceX is private, so it has no public stock [2][5].")]
+        result = tm.coerce_research_answer(messages)
+        assert isinstance(result, tm.ResearchAnswer)
+        assert result.answer.startswith("SpaceX is private")
+        assert result.cited_source_ids == [2, 5]
+
+    def test_prose_without_markers_yields_empty_citations(self):
+        result = tm.coerce_research_answer([AIMessage(content="I could not find a source.")])
+        assert isinstance(result, tm.ResearchAnswer)
+        assert result.cited_source_ids == []
+
+    def test_recovers_fenced_json(self):
+        messages = [AIMessage(content='```json\n{"answer": "Paris [1].", "cited_source_ids": [1]}\n```')]
+        result = tm.coerce_research_answer(messages)
+        assert isinstance(result, tm.ResearchAnswer)
+        assert result.answer == "Paris [1]."
+        assert result.cited_source_ids == [1]
+
+    def test_skips_tool_call_only_turns_for_the_final_prose(self):
+        messages = [
+            AIMessage(content="", tool_calls=[{"name": "tavily_search", "args": {}, "id": "1"}]),
+            ToolMessage(content="result", tool_call_id="1"),
+            AIMessage(content="Final prose answer [3]."),
+        ]
+        result = tm.coerce_research_answer(messages)
+        assert result.answer == "Final prose answer [3]."
+        assert result.cited_source_ids == [3]
+
+    def test_returns_none_when_no_ai_text(self):
+        assert tm.coerce_research_answer([HumanMessage(content="q")]) is None
+        assert tm.coerce_research_answer([]) is None
+
+
+# --------------------------------------------------------------------------------------
 # extract_tool_calls
 # --------------------------------------------------------------------------------------
 

@@ -74,20 +74,6 @@ What it does:
 Endpoints: `GET /` (the page), `POST /api/ask` (`{"question": "..."}` → JSON result),
 `POST /api/transcribe` (raw audio bytes → `{"text": "..."}`, voice input), `GET /healthz`.
 
-### Can I host this on GitHub Pages?
-
-**No — GitHub Pages serves static files only.** This demo needs a running Python backend
-because:
-
-- It calls the Tavily and Nebius APIs using **secret keys**, which must never be shipped to
-  a static page (anyone could read them in the page source).
-- The agent logic and citation validation run server-side in Python.
-
-To deploy it for real, use a host that can run Python and hold secret environment
-variables — e.g. [Vercel](https://vercel.com) (configured below),
-[Render](https://render.com), [Railway](https://railway.app), or
-[Fly.io](https://fly.io). GitHub Pages could host the HTML shell, but the **Search** button
-would have no backend to call, so the demo wouldn't function.
 
 ### Deploy to Vercel
 

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 import marketdata
 import quant
-from artifacts import MetricRegistry
+from artifacts import ChartRegistry, MetricRegistry
 
 
 class PortfolioAnalysisInput(BaseModel):
@@ -40,6 +40,11 @@ class PortfolioAnalysisInput(BaseModel):
     var_horizon_days: int = Field(default=1, description="VaR/CVaR horizon in trading days.")
     benchmark_ticker: Optional[str] = Field(
         default=None, description="Benchmark for beta, e.g. 'SPY'. Omit to skip beta."
+    )
+    include_charts: bool = Field(
+        default=True,
+        description="Also build interactive charts (performance, drawdown, return "
+        "distribution, correlation, allocation) referenceable as [chart:j].",
     )
 
 
@@ -57,11 +62,16 @@ class PortfolioAnalysisTool(BaseTool):
     args_schema: type[BaseModel] = PortfolioAnalysisInput
 
     _registry: MetricRegistry = PrivateAttr(default_factory=MetricRegistry)
+    _chart_registry: ChartRegistry = PrivateAttr(default_factory=ChartRegistry)
     _price_source: Any = PrivateAttr(default=None)
 
     @property
     def registry(self) -> MetricRegistry:
         return self._registry
+
+    @property
+    def chart_registry(self) -> ChartRegistry:
+        return self._chart_registry
 
     def set_price_source(self, source: Any) -> None:
         """Inject a marketdata.PriceSource (used by tests to stay offline)."""
@@ -76,6 +86,7 @@ class PortfolioAnalysisTool(BaseTool):
         var_confidence: float = 0.95,
         var_horizon_days: int = 1,
         benchmark_ticker: Optional[str] = None,
+        include_charts: bool = True,
         run_manager: Optional[CallbackManagerForToolRun] = None,
         **kwargs: Any,
     ) -> str:
@@ -131,10 +142,26 @@ class PortfolioAnalysisTool(BaseTool):
         )
 
         records = self._registry.register_portfolio_stats(stats)
-        return self._format(history, weight_map, records)
+
+        chart_records: list = []
+        if include_charts:
+            try:
+                import charts  # lazy: only needed when charts are requested
+
+                chart_records = charts.build_portfolio_charts(
+                    history.prices[available], weight_map, stats, self._chart_registry
+                )
+            except Exception as exc:  # charts are a nice-to-have; never fail the analysis
+                chart_records = []
+                if run_manager is not None:
+                    run_manager.on_text(f"(charts skipped: {type(exc).__name__}: {exc})")
+
+        return self._format(history, weight_map, records, chart_records)
 
     @staticmethod
-    def _format(history: "marketdata.PriceHistory", weights: dict, records: list) -> str:
+    def _format(
+        history: "marketdata.PriceHistory", weights: dict, records: list, charts: list
+    ) -> str:
         lines: List[str] = []
         alloc = ", ".join(f"{t} {w * 100:.1f}%" for t, w in weights.items())
         lines.append(f"Portfolio: {alloc}")
@@ -148,10 +175,16 @@ class PortfolioAnalysisTool(BaseTool):
         lines.append("Computed metrics (cite by id as [metric:k]):")
         for r in records:
             lines.append(f"  [metric:{r.id}] {r.name} = {r.formatted()} — {r.definition}")
+        if charts:
+            lines.append("")
+            lines.append("Available charts (reference relevant ones as [chart:j]):")
+            for c in charts:
+                lines.append(f"  [chart:{c.id}] {c.title} — {c.caption}")
         lines.append("")
         lines.append(
-            "Cite every quantitative claim with its [metric:k] id and list those ids in "
-            "referenced_metric_ids. Do not invent or recompute any value."
+            "Cite every quantitative claim with its [metric:k] id (list them in "
+            "referenced_metric_ids) and embed relevant [chart:j] markers where a visual helps "
+            "(list them in referenced_chart_ids). Do not invent or recompute any value."
         )
         return "\n".join(lines)
 

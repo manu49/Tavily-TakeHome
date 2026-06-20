@@ -139,3 +139,61 @@ class MetricRegistry:
 
     def __len__(self) -> int:
         return len(self._by_id)
+
+
+@dataclass
+class ChartRecord:
+    id: int
+    kind: str          # e.g. "price_history", "drawdown", "return_distribution"
+    title: str
+    caption: str
+    spec: Dict[str, Any] = field(default_factory=dict)  # Plotly figure JSON (data + layout)
+
+    def to_dict(self, *, include_spec: bool = True) -> dict:
+        d = {"id": self.id, "kind": self.kind, "title": self.title, "caption": self.caption}
+        if include_spec:
+            d["spec"] = self.spec
+        return d
+
+
+class ChartRegistry:
+    """Code-owned, stably-numbered interactive charts. Same pattern as MetricRegistry: the
+    model references a chart as [chart:j] but never produces the figure or its data — the
+    Plotly spec is built from registered metrics / fetched series and held here, surfaced to
+    the frontend (which renders it with plotly.js), never round-tripped through the model.
+
+    Lightweight on purpose: stores the already-built spec dict; Plotly itself lives in
+    charts.py. The spec is intentionally kept out of the model-facing `to_markdown`, since a
+    full figure JSON would bloat the prompt — the model only needs ids, titles, captions."""
+
+    def __init__(self) -> None:
+        self._by_id: Dict[int, ChartRecord] = {}
+        self._next_id = 1
+
+    def register(self, kind: str, title: str, caption: str, spec: Dict[str, Any]) -> ChartRecord:
+        record = ChartRecord(
+            id=self._next_id, kind=kind, title=title, caption=caption, spec=spec or {}
+        )
+        self._by_id[record.id] = record
+        self._next_id += 1
+        return record
+
+    def get(self, chart_id: int) -> Optional[ChartRecord]:
+        return self._by_id.get(chart_id)
+
+    def ids(self) -> set[int]:
+        return set(self._by_id.keys())
+
+    def all_charts(self) -> List[ChartRecord]:
+        return [self._by_id[i] for i in sorted(self._by_id)]
+
+    def to_markdown(self) -> str:
+        """Model-facing listing — ids/titles/captions only, no figure JSON."""
+        if not self._by_id:
+            return "_No charts available._"
+        return "\n".join(
+            f"[chart:{c.id}] {c.title} — {c.caption}" for c in self.all_charts()
+        )
+
+    def __len__(self) -> int:
+        return len(self._by_id)

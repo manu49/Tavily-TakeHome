@@ -273,6 +273,13 @@ class ResearchAnswer(BaseModel):
             "metrics; leave empty for pure web-research answers."
         ),
     )
+    referenced_chart_ids: List[int] = Field(
+        default_factory=list,
+        description=(
+            "Every chart id embedded in `answer` as [chart:j], deduplicated. Only used when "
+            "analyze_portfolio returned charts; leave empty otherwise."
+        ),
+    )
 
 
 SYSTEM_PROMPT = """You are a meticulous research assistant backed by Tavily web search.
@@ -307,6 +314,7 @@ STRAY_MARKER_RE = re.compile(r"【[^】]*】")
 # CITATION_MARKER_RE (\[(\d+)\]) cannot match `[metric:3]`, so the two namespaces never
 # collide -- a number can be both source id 3 and metric id 3 without ambiguity.
 METRIC_MARKER_RE = re.compile(r"\[metric:(\d+)\]")
+CHART_MARKER_RE = re.compile(r"\[chart:(\d+)\]")
 
 
 @dataclass
@@ -320,6 +328,9 @@ class ValidationResult:
     declared_metric_ids: set[int] = field(default_factory=set)
     inline_metric_ids: set[int] = field(default_factory=set)
     missing_metric_ids: set[int] = field(default_factory=set)
+    declared_chart_ids: set[int] = field(default_factory=set)
+    inline_chart_ids: set[int] = field(default_factory=set)
+    missing_chart_ids: set[int] = field(default_factory=set)
 
     def to_dict(self) -> dict:
         return {
@@ -332,6 +343,9 @@ class ValidationResult:
             "declared_metric_ids": sorted(self.declared_metric_ids),
             "inline_metric_ids": sorted(self.inline_metric_ids),
             "missing_metric_ids": sorted(self.missing_metric_ids),
+            "declared_chart_ids": sorted(self.declared_chart_ids),
+            "inline_chart_ids": sorted(self.inline_chart_ids),
+            "missing_chart_ids": sorted(self.missing_chart_ids),
         }
 
 
@@ -339,17 +353,19 @@ def validate_artifacts(
     answer: ResearchAnswer,
     source_registry: SourceRegistry,
     metric_registry: Optional[Any] = None,
+    chart_registry: Optional[Any] = None,
 ) -> ValidationResult:
     """Deterministic post-hoc check over every code-owned artifact the answer references:
 
     1. Every cited source id (declared in `cited_source_ids` or inline `[n]`) must exist in
        the SourceRegistry -- a pass means zero hallucinated sources, by construction.
-    2. Every referenced metric id (declared in `referenced_metric_ids` or inline
-       `[metric:k]`) must exist in the MetricRegistry -- a pass means zero fabricated
-       numbers, by construction. When no metric_registry is given (pure research run), any
-       metric reference is treated as invalid.
-    3. The answer must contain no improvised, non-`[n]` citation-shaped marker (e.g.
-       `【1†...】`).
+    2. Every referenced metric id (`referenced_metric_ids` or inline `[metric:k]`) must
+       exist in the MetricRegistry -- zero fabricated numbers, by construction.
+    3. Every referenced chart id (`referenced_chart_ids` or inline `[chart:j]`) must exist
+       in the ChartRegistry -- the model can't embed a figure that was never built.
+    When the matching registry is absent (e.g. a pure research run), any reference of that
+    kind is treated as invalid.
+    4. The answer must contain no improvised, non-`[n]` citation-shaped marker (`【1†...】`).
     """
     valid_ids = source_registry.ids()
     declared = set(answer.cited_source_ids)
@@ -361,6 +377,11 @@ def validate_artifacts(
     inline_metric = {int(m) for m in METRIC_MARKER_RE.findall(answer.answer)}
     missing_metric = (declared_metric | inline_metric) - valid_metric_ids
 
+    valid_chart_ids = chart_registry.ids() if chart_registry is not None else set()
+    declared_chart = set(getattr(answer, "referenced_chart_ids", []) or [])
+    inline_chart = {int(m) for m in CHART_MARKER_RE.findall(answer.answer)}
+    missing_chart = (declared_chart | inline_chart) - valid_chart_ids
+
     stray_markers = STRAY_MARKER_RE.findall(answer.answer)
 
     errors: List[str] = []
@@ -368,6 +389,8 @@ def validate_artifacts(
         errors.append(f"Cited source id(s) not found in registry: {sorted(missing)}")
     if missing_metric:
         errors.append(f"Referenced metric id(s) not found in registry: {sorted(missing_metric)}")
+    if missing_chart:
+        errors.append(f"Referenced chart id(s) not found in registry: {sorted(missing_chart)}")
     if stray_markers:
         errors.append(f"Non-standard citation marker(s) found (expected [n]): {stray_markers}")
 
@@ -381,6 +404,9 @@ def validate_artifacts(
         declared_metric_ids=declared_metric,
         inline_metric_ids=inline_metric,
         missing_metric_ids=missing_metric,
+        declared_chart_ids=declared_chart,
+        inline_chart_ids=inline_chart,
+        missing_chart_ids=missing_chart,
     )
 
 
@@ -594,6 +620,7 @@ class RunResult:
     latency_seconds: float
     run_id: Optional[str] = None
     metric_registry: Optional[Any] = None  # MetricRegistry when the portfolio tool ran
+    chart_registry: Optional[Any] = None   # ChartRegistry when the portfolio tool ran
 
     def to_log_record(self) -> dict:
         return {
@@ -604,6 +631,7 @@ class RunResult:
             "cited_source_ids": sorted(set(self.answer.cited_source_ids)),
             "num_sources": len(self.registry),
             "num_metrics": len(self.metric_registry) if self.metric_registry is not None else 0,
+            "num_charts": len(self.chart_registry) if self.chart_registry is not None else 0,
             "tool_calls": self.tool_calls,
             "latency_seconds": round(self.latency_seconds, 3),
             "validation": self.validation.to_dict(),
@@ -630,6 +658,7 @@ def repair_invalid_citations(
     *,
     max_attempts: int = 2,
     metric_registry: Optional[Any] = None,
+    chart_registry: Optional[Any] = None,
 ) -> tuple[ResearchAnswer, ValidationResult, List[Any]]:
     """Give the model a bounded chance to fix its own citation mistakes.
 
@@ -671,7 +700,9 @@ def repair_invalid_citations(
             break
         structured_response = candidate
         messages = state["messages"]
-        validation = validate_artifacts(structured_response, search_tool.registry, metric_registry)
+        validation = validate_artifacts(
+            structured_response, search_tool.registry, metric_registry, chart_registry
+        )
 
     return structured_response, validation, messages
 
@@ -701,6 +732,7 @@ def run_query(
         )
 
     metric_registry = portfolio_tool.registry if portfolio_tool is not None else None
+    chart_registry = portfolio_tool.chart_registry if portfolio_tool is not None else None
 
     start = time.perf_counter()
     with collect_runs() as run_collector:
@@ -715,12 +747,15 @@ def run_query(
         if structured_response is None:
             raise RuntimeError("Agent did not produce a structured ResearchAnswer.")
 
-        validation = validate_artifacts(structured_response, search_tool.registry, metric_registry)
+        validation = validate_artifacts(
+            structured_response, search_tool.registry, metric_registry, chart_registry
+        )
         messages = state["messages"]
         if repair_attempts > 0:
             structured_response, validation, messages = repair_invalid_citations(
                 agent, search_tool, messages, structured_response, validation,
                 max_attempts=repair_attempts, metric_registry=metric_registry,
+                chart_registry=chart_registry,
             )
     latency = time.perf_counter() - start
 
@@ -737,6 +772,7 @@ def run_query(
         latency_seconds=latency,
         run_id=run_id,
         metric_registry=metric_registry,
+        chart_registry=chart_registry,
     )
 
     if log:

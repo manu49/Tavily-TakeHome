@@ -27,7 +27,8 @@ This started as the take-home's [`legacy/starter_agent.py`](legacy/starter_agent
 bare agent that searched the web but couldn't prove its answers (it emitted citation-like
 markers that pointed at nothing). It grew into a deployed, validated, observable product:
 grounded citations, a portfolio-analytics tool, a single-page web UI, optional voice input,
-and a Vercel deployment. The full arc is in
+and a Vercel deployment. For the approach and the value it creates, see the
+[**Technical Statement**](Technical%20Statement.md); the full build arc is in
 [`docs/improvements.md`](docs/improvements.md) and
 [`docs/developmental_stages.md`](docs/developmental_stages.md).
 
@@ -111,6 +112,7 @@ covered in **[`docs/setup.md`](docs/setup.md)**.
 
 | Path | What |
 |---|---|
+| [`Technical Statement.md`](Technical%20Statement.md) | Approach, thought process, and the value created. |
 | [`tavily_maxer.py`](tavily_maxer.py) | The research agent — search, structured citations, validation, tracing. |
 | [`webapp.py`](webapp.py) | The web app: WSGI `app` (Vercel entrypoint) + inlined UI + local dev server. |
 | [`lib/`](lib/) | Supporting modules: portfolio parsing, quant, charts, market data, artifacts. |

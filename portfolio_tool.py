@@ -175,16 +175,20 @@ class PortfolioAnalysisTool(BaseTool):
         lines.append("Computed metrics (cite by id as [metric:k]):")
         for r in records:
             lines.append(f"  [metric:{r.id}] {r.name} = {r.formatted()} — {r.definition}")
+        chart_clause = ""
         if charts:
             lines.append("")
             lines.append("Available charts (reference relevant ones as [chart:j]):")
             for c in charts:
                 lines.append(f"  [chart:{c.id}] {c.title} — {c.caption}")
+            chart_clause = (
+                " and embed relevant [chart:j] markers where a visual helps (list them in "
+                "referenced_chart_ids)"
+            )
         lines.append("")
         lines.append(
             "Cite every quantitative claim with its [metric:k] id (list them in "
-            "referenced_metric_ids) and embed relevant [chart:j] markers where a visual helps "
-            "(list them in referenced_chart_ids). Do not invent or recompute any value."
+            f"referenced_metric_ids){chart_clause}. Do not invent or recompute any value."
         )
         return "\n".join(lines)
 

@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from typer.testing import CliRunner
 
 import tavily_maxer as tm
-from artifacts import MetricRegistry
+from artifacts import ChartRegistry, MetricRegistry
 
 runner = CliRunner()
 
@@ -390,6 +390,45 @@ class TestValidateArtifacts:
         result = tm.validate_artifacts(answer, tm.SourceRegistry(), self.make_metric_registry(3))
         assert result.inline_ids == set()
         assert result.inline_metric_ids == {3}
+
+    def make_chart_registry(self, n: int):
+        reg = ChartRegistry()
+        for i in range(n):
+            reg.register("kind", f"Chart {i}", "cap", {"data": [], "layout": {}})
+        return reg
+
+    def test_valid_chart_reference_passes(self):
+        answer = tm.ResearchAnswer(answer="See the chart [chart:1].", referenced_chart_ids=[1])
+        result = tm.validate_artifacts(
+            answer, tm.SourceRegistry(), None, self.make_chart_registry(2)
+        )
+        assert result.valid
+        assert result.inline_chart_ids == {1}
+
+    def test_missing_chart_id_fails(self):
+        answer = tm.ResearchAnswer(answer="Bad embed [chart:9].")
+        result = tm.validate_artifacts(
+            answer, tm.SourceRegistry(), None, self.make_chart_registry(2)
+        )
+        assert not result.valid
+        assert result.missing_chart_ids == {9}
+
+    def test_chart_reference_without_registry_is_invalid(self):
+        answer = tm.ResearchAnswer(answer="Sneaky [chart:1].")
+        result = tm.validate_citations(answer, tm.SourceRegistry())
+        assert not result.valid
+        assert 1 in result.missing_chart_ids
+
+    def test_chart_marker_isolated_from_metric_and_source(self):
+        answer = tm.ResearchAnswer(answer="[1] [metric:1] [chart:1] together.")
+        result = tm.validate_artifacts(
+            answer, self.make_source_registry(1), self.make_metric_registry(1),
+            self.make_chart_registry(1),
+        )
+        assert result.inline_ids == {1}
+        assert result.inline_metric_ids == {1}
+        assert result.inline_chart_ids == {1}
+        assert result.valid
 
 
 # --------------------------------------------------------------------------------------

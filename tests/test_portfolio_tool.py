@@ -82,6 +82,22 @@ class TestAnalyzePortfolio:
         tool._run(["AAA", "BBB"])
         assert not any(m.key == "beta" for m in tool.registry.all_metrics())
 
+    def test_charts_are_built_and_referenceable(self):
+        tool = _tool()
+        out = tool._run(["AAA", "BBB"])
+        chart_ids = {int(m) for m in re.findall(r"\[chart:(\d+)\]", out)}
+        assert chart_ids == tool.chart_registry.ids()
+        assert len(tool.chart_registry) == 5  # multi-asset full set
+        for c in tool.chart_registry.all_charts():
+            assert "data" in c.spec and "layout" in c.spec
+
+    def test_include_charts_false_skips_chart_build(self):
+        tool = _tool()
+        out = tool._run(["AAA", "BBB"], include_charts=False)
+        assert "[chart:" not in out
+        assert len(tool.chart_registry) == 0
+        assert len(tool.registry) >= 10  # metrics still computed
+
 
 class TestToolValidationWiring:
     """End-to-end: metrics the tool registers validate; fabricated ones do not."""

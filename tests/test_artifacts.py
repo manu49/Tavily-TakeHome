@@ -7,7 +7,7 @@ import math
 import pytest
 
 import quant as q
-from artifacts import MetricRegistry
+from artifacts import ChartRegistry, MetricRegistry
 
 
 def _stats(**overrides):
@@ -84,4 +84,39 @@ class TestMetricRegistry:
         r = reg.register("x", "X", 1.0, "ratio", "d")
         assert reg.get(r.id) is r
         assert reg.get(999) is None
+        assert len(reg) == 1
+
+
+class TestChartRegistry:
+    def _spec(self):
+        return {"data": [{"type": "scatter", "y": [1, 2, 3]}], "layout": {"title": "t"}}
+
+    def test_register_assigns_sequential_ids(self):
+        reg = ChartRegistry()
+        a = reg.register("price_history", "Perf", "cap", self._spec())
+        b = reg.register("drawdown", "DD", "cap", self._spec())
+        assert (a.id, b.id) == (1, 2)
+        assert reg.ids() == {1, 2}
+
+    def test_to_markdown_excludes_spec(self):
+        reg = ChartRegistry()
+        reg.register("price_history", "Perf", "a caption", self._spec())
+        md = reg.to_markdown()
+        assert "[chart:1]" in md and "Perf" in md
+        assert "scatter" not in md  # the heavy spec JSON must not leak into the prompt
+
+    def test_record_to_dict_can_omit_spec(self):
+        reg = ChartRegistry()
+        rec = reg.register("drawdown", "DD", "cap", self._spec())
+        assert "spec" in rec.to_dict()
+        assert "spec" not in rec.to_dict(include_spec=False)
+
+    def test_empty_registry_markdown(self):
+        assert ChartRegistry().to_markdown() == "_No charts available._"
+
+    def test_get_and_len(self):
+        reg = ChartRegistry()
+        rec = reg.register("allocation", "Alloc", "cap", self._spec())
+        assert reg.get(rec.id) is rec
+        assert reg.get(42) is None
         assert len(reg) == 1

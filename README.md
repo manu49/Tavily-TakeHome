@@ -4,7 +4,7 @@
 
 ## Demo
 
-![The Tavily Maxer web app on Vercel, with the Research / Portfolio mode toggle](Demo/v2_both_modes.png)
+![The Tavily Maxer landing page on Vercel — "Intelligence for Portfolio Managers" with the Research / Portfolio mode toggle](Demo/landing_page.png)
 
 <video src="https://github.com/manu49/Tavily-TakeHome/raw/main/Demo/v3_Tavily_Maxer.mp4" controls width="100%"></video>
 

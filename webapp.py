@@ -358,6 +358,10 @@ PAGE = r"""<!DOCTYPE html>
   .answer p { margin: 0 0 12px; }
   .answer ul, .answer ol { margin: 0 0 12px; padding-left: 22px; }
   .answer code { background: #0c1430; padding: 1px 6px; border-radius: 5px; font-size: 14px; }
+  .answer table.md { border-collapse: collapse; margin: 10px 0 14px; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
+  .answer table.md th, .answer table.md td { border: 1px solid var(--border); padding: 7px 11px; text-align: left; vertical-align: top; }
+  .answer table.md th { background: var(--panel-2); color: var(--text); font-weight: 600; white-space: nowrap; }
+  .answer hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
   .cite {
     display: inline-block; font-size: 12px; font-weight: 700; line-height: 1;
     color: var(--accent-2); background: rgba(54,214,195,.12);
@@ -594,11 +598,30 @@ function renderMarkdown(md) {
     .replace(/\[chart:(\d+)\]/g, '<a class="pill chartlink" data-cid="$1">chart $1</a>')
     .replace(/\[(\d+)\]/g, '<a class="cite" href="#src-$1" data-id="$1">$1</a>');
   const closeList = () => { if (inList) { html += `</${inList}>`; inList = null; } };
-  for (let raw of lines) {
-    const line = raw.trim();
+  // A markdown table separator row: only spaces/pipes/colons/dashes, with at least one of each
+  // structural char. e.g. |---|---|  or  :--- | ---:
+  const isSep = (s) => { const t = s.trim(); return /^[\s|:-]+$/.test(t) && t.includes('-') && t.includes('|'); };
+  const cells = (s) => s.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
     if (!line) { closeList(); continue; }
     let m;
-    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) { closeList(); const n = m[1].length; html += `<h${n}>${inline(m[2])}</h${n}>`; }
+    // table: a row containing '|' immediately followed by a separator row
+    if (line.includes('|') && i + 1 < lines.length && isSep(lines[i + 1])) {
+      closeList();
+      const head = cells(line);
+      let body = '';
+      i += 2;
+      for (; i < lines.length && lines[i].trim() && lines[i].includes('|'); i++) {
+        body += '<tr>' + cells(lines[i]).map(c => `<td>${inline(c)}</td>`).join('') + '</tr>';
+      }
+      i--;
+      html += '<table class="md"><thead><tr>' + head.map(h => `<th>${inline(h)}</th>`).join('') +
+              '</tr></thead><tbody>' + body + '</tbody></table>';
+      continue;
+    }
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { closeList(); const n = Math.min(m[1].length, 3); html += `<h${n}>${inline(m[2])}</h${n}>`; }
+    else if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) { closeList(); html += '<hr>'; }
     else if ((m = line.match(/^[-*]\s+(.*)$/))) { if (inList !== 'ul') { closeList(); html += '<ul>'; inList = 'ul'; } html += `<li>${inline(m[1])}</li>`; }
     else if ((m = line.match(/^\d+\.\s+(.*)$/))) { if (inList !== 'ol') { closeList(); html += '<ol>'; inList = 'ol'; } html += `<li>${inline(m[1])}</li>`; }
     else { closeList(); html += `<p>${inline(line)}</p>`; }

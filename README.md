@@ -98,8 +98,9 @@ a validation badge confirming every number was computed — not estimated by the
 
 Click the 🎤 mic to **dictate** your question instead of typing. The browser records audio,
 the server transcribes it via **ElevenLabs** speech-to-text, and the transcript drops into
-the box for you to review and run. Enabled when `ELEVENLABS_API_KEY` is set; needs a secure
-(HTTPS/localhost) context.
+the box for you to review and run. **No setup needed to use it on the live app** — just
+allow mic access when prompted. (The ElevenLabs key lives on the server; only someone
+deploying their own copy configures it — see [`docs/setup.md`](docs/setup.md).)
 
 ## Setup & deployment
 

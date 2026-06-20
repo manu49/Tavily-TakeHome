@@ -148,3 +148,21 @@ TECHNICAL_STATEMENT.md
 - [ ] `TECHNICAL_STATEMENT.md` — approach, why citations+observability, business value
 - [ ] Build record (this session's chat history / equivalent)
 - [ ] Bonus: LangSmith tracing satisfies "industry-standard observability" callout
+
+## Later addition — voice input (ElevenLabs speech-to-text)
+
+Added a 🎤 mic to the web demo so a question can be dictated instead of typed.
+
+- **Flow:** the browser records audio (`MediaRecorder`) → `POST /api/transcribe` forwards the
+  raw bytes to ElevenLabs `scribe_v1` → the transcript drops into the textarea for the user to
+  review and Search (no auto-submit).
+- **Key stays server-side.** `ELEVENLABS_API_KEY` is read by the backend and sent in the
+  `xi-api-key` header; the browser only ever uploads audio, never the key — the same secret
+  boundary the README already commits to for Tavily/Nebius.
+- **Zero new dependencies.** The multipart upload is built by hand with stdlib `urllib`, so the
+  Vercel bundle is unchanged. The route is wired into both the WSGI `app()` (Vercel) and the
+  dev-server `do_POST()`.
+- **Degrades gracefully.** With no key, the backend returns a clear error and the mic is
+  disabled; the button also disables itself on browsers without a secure context
+  (`getUserMedia` needs localhost or HTTPS). Search and portfolio analysis are unaffected.
+- **Cost note:** ElevenLabs STT bills per use, so each transcription consumes credits.

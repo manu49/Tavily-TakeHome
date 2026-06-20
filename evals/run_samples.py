@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT))            # entrypoints
+sys.path.insert(0, str(ROOT / "lib"))    # supporting modules
 
 import tavily_maxer as tm  # noqa: E402
 

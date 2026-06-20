@@ -48,11 +48,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+# Supporting library modules (quant, charts, portfolio, portfolio_tool, ...) live in lib/
+# to keep the repo root uncluttered. Put it on sys.path so they keep importing by name.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
 import typer
 from dotenv import load_dotenv

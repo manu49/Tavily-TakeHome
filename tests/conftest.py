@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))          # entrypoints (tavily_maxer.py, webapp.py)
+sys.path.insert(0, str(_ROOT / "lib"))  # supporting modules (quant, charts, portfolio, ...)
 
 
 @pytest.fixture(autouse=True)

@@ -42,13 +42,19 @@ import argparse
 import base64
 import json
 import os
+import sys
 import traceback
 import urllib.error
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+# Supporting library modules (portfolio, quant, charts, ...) live in lib/; put it on
+# sys.path so this app and tavily_maxer keep importing them by name.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
 import tavily_maxer as tm
 

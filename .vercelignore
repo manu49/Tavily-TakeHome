@@ -8,4 +8,5 @@ uv.lock
 *.pyc
 .env
 .env.local
-starter_agent.py
+docs
+legacy

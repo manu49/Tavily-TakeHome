@@ -5,8 +5,10 @@ Ask a question, get a research answer where every claim traces to a real, retrie
 source — citations are validated against what Tavily actually returned, not improvised by
 the model.
 
-The agent itself lives in [`tavily_maxer.py`](tavily_maxer.py); the rationale and design
-are in [`improvements.md`](improvements.md).
+The agent itself lives in [`tavily_maxer.py`](tavily_maxer.py); supporting modules (quant,
+charts, portfolio, market data) are under [`lib/`](lib/) and design docs under
+[`docs/`](docs/). The rationale and design are in
+[`docs/improvements.md`](docs/improvements.md).
 
 ## Setup
 

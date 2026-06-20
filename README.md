@@ -1,134 +1,85 @@
-# tavily_maxer
+# Tavily Maxer — Intelligence for Portfolio Managers
 
-A Tavily + LangChain research agent with **grounded citations** and **observability**.
-Ask a question, get a research answer where every claim traces to a real, retrieved web
-source — citations are validated against what Tavily actually returned, not improvised by
-the model.
+**Live app: https://tavily-take-home.vercel.app/**
 
-The agent itself lives in [`tavily_maxer.py`](tavily_maxer.py); supporting modules (quant,
-charts, portfolio, market data) are under [`lib/`](lib/) and design docs under
-[`docs/`](docs/). The rationale and design are in
-[`docs/improvements.md`](docs/improvements.md).
+A productionized research-and-analytics web app for **portfolio managers**. Ask the web a
+question and get an answer where **every claim traces to a real, retrieved source**, or
+upload a portfolio and get **code-computed** risk/return analytics with interactive charts.
+In finance, precise and verifiable data is critical — so nothing here is improvised by the
+model: citations are validated against what Tavily actually returned, and every metric is
+computed in code, never estimated by the LLM.
 
-## Setup
+This started as the take-home's [`legacy/starter_agent.py`](legacy/starter_agent.py) — a
+bare agent that searched the web but couldn't prove its answers (it emitted citation-like
+markers that pointed at nothing). It grew into a deployed, validated, observable product:
+grounded citations, a portfolio-analytics tool, a single-page web UI, optional voice input,
+and a Vercel deployment. The full arc is in
+[`docs/improvements.md`](docs/improvements.md) and
+[`docs/developmental_stages.md`](docs/developmental_stages.md).
 
-Two API keys are required (free tiers available):
+## Tech stack
 
-1. **Tavily** — https://app.tavily.com
-2. **Nebius** — https://tokenfactory.nebius.com
+- **Python** — agent, analytics, and web server (standard-library `http.server`; no web
+  framework, so the dependency footprint stays small).
+- **Tavily** — web search; results are deduped and assigned code-owned source IDs so the
+  model can only cite things that were actually retrieved.
+- **LangChain** (`create_agent`, structured output) + **Nebius** — the ReAct agent loop and
+  LLM synthesis, with a structured `ResearchAnswer` schema that forces inline `[n]`
+  citations.
+- **NumPy / pandas / yfinance / Plotly** — the portfolio engine: live prices, in-house
+  risk/return quant (annualized return, volatility, Sharpe, etc.), and interactive charts.
+  See [`docs/portfolio_analysis_design.md`](docs/portfolio_analysis_design.md).
+- **ElevenLabs** — optional speech-to-text for voice input (server-side, key never reaches
+  the browser).
+- **Vercel** — hosting; the whole app deploys from one WSGI entrypoint (`webapp:app`).
+- **LangSmith** — optional tracing/observability, with a local `logs/runs.jsonl` fallback.
 
-Put them in `.env.local` (or export them):
+## How to use
 
-```bash
-TAVILY_API_KEY="tvly-..."
-NEBIUS_API_KEY="..."
-```
+Open the [live app](https://tavily-take-home.vercel.app/) (or run it locally — see
+[`docs/setup.md`](docs/setup.md)).
 
-Optional — for **voice input** (the 🎤 mic button in the web demo), add an
-[ElevenLabs](https://elevenlabs.io) key. Without it the mic is simply disabled; search and
-portfolio analysis work unchanged.
+### 1. Research mode
 
-```bash
-ELEVENLABS_API_KEY="..."
-```
+Ask any question and get a grounded, cited answer with a ✓/✗ validation badge and a numbered
+Sources panel. Try the sample question in [`Demo/research.txt`](Demo/research.txt):
 
-## CLI
+> Pick top 10 best ETFs for investing in AI in 2026.
 
-```bash
-uv run tavily_maxer.py "What changed in the AI search market this year?"
-```
+Paste it into the box, hit **Search**, and click any `[n]` citation chip to jump to its
+source.
 
-Streams the agent's tool calls, then prints the answer, a numbered Sources panel, and a
-✓/✗ citation-validation badge.
+### 2. Portfolio mode
 
-## Web demo
+Switch to **Portfolio**, upload [`Demo/AAPL_SPCX.csv`](Demo/AAPL_SPCX.csv) (a holdings file
+with ticker and dollar amounts — AAPL and SPCX; weights are derived from market value), and
+enter a prompt like:
 
-[`webapp.py`](webapp.py) serves a single-page landing/demo UI: type a question, hit
-**Search**, and get the grounded answer, numbered sources, and a verification badge — in
-the browser.
+> Analyse my portfolio over the last 5 years
 
-```bash
-uv run webapp.py                 # open http://127.0.0.1:8000
-uv run webapp.py --port 9000     # custom port
-uv run webapp.py --host 0.0.0.0  # expose on your network
-```
+You get code-computed headline metrics (return, volatility, Sharpe), interactive charts, and
+a validation badge confirming every number was computed — not estimated by the model.
 
-What it does:
+### 3. Voice input (optional)
 
-- **Real agent, not a mock.** `POST /api/ask` calls the same
-  [`run_query()`](tavily_maxer.py) path used by the CLI and the eval suite, so every demo
-  search runs live Tavily web search → Nebius synthesis → citation validation.
-- **Clickable citations.** `[n]` markers in the answer become chips that scroll to and
-  highlight the matching source.
-- **Voice input (optional).** Click the 🎤 mic to dictate a question: the browser records
-  audio, `POST /api/transcribe` forwards it to ElevenLabs speech-to-text (the key stays
-  server-side), and the transcript drops into the box for you to review and search. Enabled
-  only when `ELEVENLABS_API_KEY` is set; needs a secure context (localhost or HTTPS).
-- **Verification badge + stats.** Shows ✓/✗ validation, source count, number of web
-  searches, latency, and the model used.
-- **Zero extra dependencies.** Built on the Python standard-library `http.server` with one
-  inline HTML page — the project's dependency footprint is unchanged. Reads the same
-  `TAVILY_API_KEY` / `NEBIUS_API_KEY` from the environment or `.env.local` and warns at
-  startup if either is missing.
+Click the 🎤 mic to **dictate** your question instead of typing. The browser records audio,
+the server transcribes it via **ElevenLabs** speech-to-text, and the transcript drops into
+the box for you to review and run. Enabled when `ELEVENLABS_API_KEY` is set; needs a secure
+(HTTPS/localhost) context.
 
-Endpoints: `GET /` (the page), `POST /api/ask` (`{"question": "..."}` → JSON result),
-`POST /api/transcribe` (raw audio bytes → `{"text": "..."}`, voice input), `GET /healthz`.
+## Setup & deployment
 
+Running locally, the required API keys, tests, and deploying your own copy to Vercel are all
+covered in **[`docs/setup.md`](docs/setup.md)**.
 
-### Deploy to Vercel
+## Project layout
 
-This repo is already set up for Vercel. Vercel's native Python runtime serves the whole
-deployment from one WSGI app (`app` in `webapp.py`), which handles both the page (`GET /`)
-and the agent endpoint (`POST /api/ask`) using only the standard library. The whole demo is
-one self-contained file — the page HTML is inlined in `webapp.py`, so there's no external
-asset for Vercel to bundle.
-
-| File | Role |
+| Path | What |
 |---|---|
-| [`webapp.py`](webapp.py) | The WSGI `app` (Vercel entrypoint) + inlined page HTML + the local dev server. |
-| [`pyproject.toml`](pyproject.toml) | `[tool.vercel] entrypoint = "webapp:app"` tells Vercel which app to run. |
-| [`requirements.txt`](requirements.txt) | Dependencies Vercel installs. |
-
-**Steps:**
-
-1. **Push to GitHub** (Vercel deploys from a Git repo):
-   ```bash
-   git add .
-   git commit -m "Add Vercel-deployable web demo"
-   git push
-   ```
-2. **Import the repo** at [vercel.com/new](https://vercel.com/new) → pick this repository →
-   **Import**. Leave the framework preset as **Other**; no build command is needed.
-3. **Add environment variables** (Project → Settings → Environment Variables), for all
-   environments:
-   - `TAVILY_API_KEY` — your `tvly-...` key
-   - `NEBIUS_API_KEY` — your Nebius key
-   - *(optional)* `ELEVENLABS_API_KEY` — enables the 🎤 voice-input button
-   - *(optional)* `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`
-4. **Deploy.** Vercel builds and gives you a `https://<project>.vercel.app` URL. If you
-   added the env vars after the first deploy, trigger a redeploy so they take effect.
-
-Or deploy from the CLI:
-```bash
-npm i -g vercel
-vercel            # first run links/creates the project (preview deploy)
-vercel env add TAVILY_API_KEY      # repeat for NEBIUS_API_KEY
-vercel --prod     # production deploy
-```
-
-**Serverless notes:** the function runs with `log=False` (Vercel's filesystem is read-only
-outside `/tmp`, so `logs/runs.jsonl` is skipped — LangSmith tracing still works via env
-vars) and `repair_attempts=1` to keep latency bounded. Cold starts take a few seconds
-because the LangChain stack is heavy; subsequent requests are warm. If a cold-start query
-ever hits the function time limit, raise it under Project → Settings → Functions →
-**Function Max Duration**.
-
-## Tests & evals
-
-```bash
-uv run pytest                    # offline unit tests (no API calls)
-uv run evals/run_samples.py      # live sample runs against the golden question set
-```
-
-## Traces
-https://traces.com/
+| [`tavily_maxer.py`](tavily_maxer.py) | The research agent — search, structured citations, validation, tracing. |
+| [`webapp.py`](webapp.py) | The web app: WSGI `app` (Vercel entrypoint) + inlined UI + local dev server. |
+| [`lib/`](lib/) | Supporting modules: portfolio parsing, quant, charts, market data, artifacts. |
+| [`docs/`](docs/) | [setup](docs/setup.md) · [design/rationale](docs/improvements.md) · [dev log](docs/developmental_stages.md) · [portfolio design](docs/portfolio_analysis_design.md) |
+| [`Demo/`](Demo/) | Sample inputs for the two modes. |
+| [`tests/`](tests/), [`evals/`](evals/) | Offline unit tests and live sample/eval runs. |
+| [`legacy/`](legacy/) | The original `starter_agent.py` this project grew from. |

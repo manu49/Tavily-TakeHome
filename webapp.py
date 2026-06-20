@@ -39,6 +39,7 @@ Requires the same two keys as the CLI (read from the environment or a .env / .en
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import traceback
@@ -55,19 +56,16 @@ load_dotenv(".env.local", override=False)
 # Agent bridge: turn a question into a JSON-serializable result the page can render.
 # --------------------------------------------------------------------------------------
 
-def answer_question(question: str, model: str = tm.DEFAULT_MODEL) -> dict:
-    """Run one question through the real agent and shape the result for the browser."""
-    result = tm.run_query(question, model=model)
-    return shape_result(result)
-
-
 def shape_result(result: "tm.RunResult") -> dict:
-    """Shared result shaping used by both this dev server and the Vercel function."""
-    return {
+    """Shape a RunResult into the JSON the page renders. Includes portfolio metrics and
+    (interactive Plotly) chart specs when the analyze_portfolio tool ran."""
+    out = {
         "question": result.question,
         "model": result.model,
         "answer": result.answer.answer,
         "cited_source_ids": sorted(set(result.answer.cited_source_ids)),
+        "referenced_metric_ids": sorted(set(result.answer.referenced_metric_ids)),
+        "referenced_chart_ids": sorted(set(result.answer.referenced_chart_ids)),
         "sources": [
             {"id": r.id, "title": r.title, "url": r.url}
             for r in result.registry.all_sources()
@@ -79,6 +77,57 @@ def shape_result(result: "tm.RunResult") -> dict:
         "tool_calls": result.tool_calls,
         "latency_seconds": round(result.latency_seconds, 2),
     }
+    if result.metric_registry is not None and len(result.metric_registry):
+        out["metrics"] = [m.to_dict() for m in result.metric_registry.all_metrics()]
+    if result.chart_registry is not None and len(result.chart_registry):
+        out["charts"] = [c.to_dict() for c in result.chart_registry.all_charts()]
+    return out
+
+
+def process_ask(payload: dict) -> tuple[int, dict]:
+    """Core request handler shared by the WSGI app and the local dev server.
+
+    Research mode (default): a question -> grounded answer. Portfolio mode (an uploaded
+    file, or portfolio_mode=true): the agent gets analyze_portfolio (+ the uploaded
+    holdings) and returns metrics and interactive charts alongside the answer. Upload is
+    handled in a single request (base64 in the JSON body) -- no server-side file storage,
+    which is what keeps this working on Vercel's ephemeral filesystem."""
+    question = (payload.get("question") or "").strip()
+    file_b64 = payload.get("file_b64")
+    filename = payload.get("filename") or "portfolio.csv"
+    portfolio_mode = bool(payload.get("portfolio_mode") or file_b64)
+
+    if not question and not file_b64:
+        return 400, {"error": "Please enter a question (or upload a portfolio)."}
+
+    portfolio = None
+    parse_report = None
+    if file_b64:
+        try:
+            content = base64.b64decode(file_b64)
+        except Exception:
+            return 400, {"error": "Could not decode the uploaded file."}
+        from portfolio import parse_portfolio
+
+        parsed = parse_portfolio(content, filename)
+        parse_report = {"ok": parsed.ok, "warnings": parsed.warnings, "errors": parsed.errors}
+        if not parsed.ok:
+            return 400, {
+                "error": "Could not read portfolio: " + "; ".join(parsed.errors),
+                "parse_report": parse_report,
+            }
+        portfolio = parsed.portfolio
+        if not question:
+            question = "Analyze the risk and return of my portfolio, including the key charts."
+
+    result = tm.run_query(
+        question, model=tm.DEFAULT_MODEL, log=False, repair_attempts=1,
+        enable_portfolio=portfolio_mode, portfolio=portfolio,
+    )
+    out = shape_result(result)
+    if parse_report is not None:
+        out["parse_report"] = parse_report
+    return 200, out
 
 
 def load_page() -> bytes:
@@ -138,13 +187,9 @@ def app(environ, start_response):
     except json.JSONDecodeError:
         return _wsgi_json(start_response, 400, {"error": "invalid JSON body"})
 
-    question = (payload.get("question") or "").strip()
-    if not question:
-        return _wsgi_json(start_response, 400, {"error": "Please enter a question."})
-
     try:
-        result = tm.run_query(question, model=tm.DEFAULT_MODEL, log=False, repair_attempts=1)
-        return _wsgi_json(start_response, 200, shape_result(result))
+        status, body = process_ask(payload)
+        return _wsgi_json(start_response, status, body)
     except Exception as exc:
         traceback.print_exc()
         return _wsgi_json(start_response, 500, {"error": f"{type(exc).__name__}: {exc}"})
@@ -189,13 +234,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "invalid JSON body"})
             return
 
-        question = (payload.get("question") or "").strip()
-        if not question:
-            self._send_json(400, {"error": "Please enter a question."})
-            return
-
         try:
-            self._send_json(200, answer_question(question))
+            status, body = process_ask(payload)
+            self._send_json(status, body)
         except Exception as exc:  # surface the failure to the page instead of a blank 500
             traceback.print_exc()
             self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
@@ -349,21 +390,61 @@ PAGE = r"""<!DOCTYPE html>
   .error { color: var(--bad); background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.3); border-radius: 12px; padding: 16px 18px; }
   footer { text-align: center; color: #4f5d7e; font-size: 13px; margin-top: 40px; }
   footer a { color: var(--muted); }
+
+  /* mode toggle */
+  .modes { display: flex; justify-content: center; margin: 18px 0 4px; }
+  .seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px; gap: 4px; }
+  .seg button { background: transparent; color: var(--muted); border: none; border-radius: 999px; padding: 7px 18px; font: inherit; font-size: 14px; cursor: pointer; }
+  .seg button.active { background: linear-gradient(90deg, var(--accent), #6a5cff); color: #fff; font-weight: 600; }
+
+  /* dropzone */
+  .dropzone { margin-top: 14px; border: 1.5px dashed var(--border); border-radius: 14px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(79,124,255,.06); }
+  .dropzone b { color: var(--text); }
+  .dropzone .file { margin-top: 8px; color: var(--accent-2); font-size: 13px; }
+  .hidden { display: none !important; }
+
+  /* metrics */
+  table.metrics { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  table.metrics td { padding: 9px 8px; border-top: 1px solid var(--border); vertical-align: top; }
+  table.metrics tr:first-child td { border-top: none; }
+  table.metrics .mid { color: var(--accent-2); font-weight: 700; width: 30px; }
+  table.metrics .mval { text-align: right; font-weight: 700; white-space: nowrap; }
+  table.metrics .mdef { color: var(--muted); font-size: 12.5px; }
+  .pill { display: inline-block; font-size: 13px; font-weight: 700; color: var(--accent-2); background: rgba(54,214,195,.12); border: 1px solid rgba(54,214,195,.3); border-radius: 6px; padding: 1px 6px; margin: 0 1px; cursor: pointer; }
+  .pill.chartlink { color: var(--accent); background: rgba(79,124,255,.12); border-color: rgba(79,124,255,.3); }
+  .chart { width: 100%; height: 360px; margin: 6px 0 18px; }
+  .chart .cap { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  .chart.target { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
 </style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
 <body>
   <div class="wrap">
     <header>
       <div class="badge"><span class="dot"></span> Powered by Tavily web search · Nebius · LangChain</div>
       <h1>tavily<span class="grad">_maxer</span></h1>
-      <p class="sub">Ask anything. Get a research answer where <b>every claim traces to a real
+      <p class="sub" id="sub">Ask anything. Get a research answer where <b>every claim traces to a real
       retrieved source</b> — citations are validated, not improvised.</p>
     </header>
+
+    <div class="modes">
+      <div class="seg">
+        <button id="modeResearch" class="active" type="button">Research</button>
+        <button id="modePortfolio" type="button">Portfolio</button>
+      </div>
+    </div>
 
     <form id="form">
       <textarea id="q" placeholder="What changed in the AI search market this year?" rows="1"></textarea>
       <button class="ask" id="ask" type="submit">Search</button>
     </form>
+
+    <div class="dropzone hidden" id="dropzone">
+      <div><b>Drop a portfolio file</b> or click to choose — CSV, Excel, or a text list (ticker, weight).</div>
+      <div class="file" id="fileName"></div>
+      <input type="file" id="fileInput" class="hidden" accept=".csv,.xlsx,.xls,.txt" />
+    </div>
 
     <div class="examples" id="examples">
       <span class="chip">What changed in the AI search market this year?</span>
@@ -378,6 +459,14 @@ PAGE = r"""<!DOCTYPE html>
       <div class="card">
         <h2>Answer</h2>
         <div class="answer" id="answer"></div>
+      </div>
+      <div class="card hidden" id="chartsCard">
+        <h2>Charts</h2>
+        <div id="charts"></div>
+      </div>
+      <div class="card hidden" id="metricsCard">
+        <h2>Metrics</h2>
+        <table class="metrics"><tbody id="metrics"></tbody></table>
       </div>
       <div class="card" id="sourcesCard">
         <h2>Sources</h2>
@@ -413,6 +502,33 @@ const sourcesEl = document.getElementById('sources');
 const sourcesCard = document.getElementById('sourcesCard');
 const vbadge = document.getElementById('vbadge');
 const stats = document.getElementById('stats');
+const sub = document.getElementById('sub');
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const fileName = document.getElementById('fileName');
+const chartsCard = document.getElementById('chartsCard');
+const chartsEl = document.getElementById('charts');
+const metricsCard = document.getElementById('metricsCard');
+const metricsEl = document.getElementById('metrics');
+const examplesEl = document.getElementById('examples');
+
+let mode = 'research';            // 'research' | 'portfolio'
+let uploadedFile = null;          // { name, b64 }
+let metricMap = {};               // id -> metric record (for inline value chips)
+
+const EXAMPLES = {
+  research: [
+    'What changed in the AI search market this year?',
+    'Who won the most recent Nobel Prize in Physics?',
+    'Compare the latest flagship phones from Apple and Google.',
+    'What are the newest features in Python 3.13?',
+  ],
+  portfolio: [
+    'Analyze a portfolio of 60% AAPL and 40% MSFT over the last 5 years.',
+    'What is the 95% 1-day VaR of 50% SPY, 30% QQQ, 20% TLT?',
+    'Compare the Sharpe ratio and drawdown of NVDA vs the S&P 500.',
+  ],
+};
 
 // auto-grow textarea
 q.addEventListener('input', () => { q.style.height = 'auto'; q.style.height = q.scrollHeight + 'px'; });
@@ -434,6 +550,12 @@ function renderMarkdown(md) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // [metric:k] -> a chip showing the computed value; [chart:j] -> a link to the chart.
+    .replace(/\[metric:(\d+)\]/g, (_, id) => {
+      const m = metricMap[id];
+      return `<span class="pill" data-mid="${id}" title="${m ? escapeHtml(m.name) : ''}">${m ? escapeHtml(m.formatted) : 'metric ' + id}</span>`;
+    })
+    .replace(/\[chart:(\d+)\]/g, '<a class="pill chartlink" data-cid="$1">chart $1</a>')
     .replace(/\[(\d+)\]/g, '<a class="cite" href="#src-$1" data-id="$1">$1</a>');
   const closeList = () => { if (inList) { html += `</${inList}>`; inList = null; } };
   for (let raw of lines) {
@@ -462,42 +584,130 @@ function renderSources(sources, cited) {
     </div>`).join('');
 }
 
-// Clicking a citation chip scrolls to and flashes its source row.
+function renderMetrics(metrics) {
+  metricMap = {};
+  (metrics || []).forEach(m => { metricMap[m.id] = m; });
+  if (!metrics || !metrics.length) { metricsCard.classList.add('hidden'); return; }
+  metricsCard.classList.remove('hidden');
+  metricsEl.innerHTML = metrics.map(m => `
+    <tr id="metric-${m.id}">
+      <td class="mid">${m.id}</td>
+      <td>${escapeHtml(m.name)}<div class="mdef">${escapeHtml(m.definition || '')}</div></td>
+      <td class="mval">${escapeHtml(m.formatted)}</td>
+    </tr>`).join('');
+}
+
+function renderCharts(charts) {
+  if (!charts || !charts.length) { chartsCard.classList.add('hidden'); chartsEl.innerHTML = ''; return; }
+  chartsCard.classList.remove('hidden');
+  chartsEl.innerHTML = charts.map(c => `
+    <div class="cap">[chart:${c.id}] ${escapeHtml(c.title)}</div>
+    <div class="chart" id="chart-${c.id}"></div>`).join('');
+  charts.forEach(c => {
+    const spec = c.spec || {};
+    try {
+      Plotly.newPlot('chart-' + c.id, spec.data || [], spec.layout || {},
+                     { responsive: true, displayModeBar: false });
+    } catch (e) {
+      document.getElementById('chart-' + c.id).textContent = 'Could not render chart.';
+    }
+  });
+}
+
+// Clicking a citation chip scrolls to its source; a chart link to its chart; a metric chip
+// to its row.
 answerEl.addEventListener('click', (e) => {
-  const a = e.target.closest('.cite');
-  if (!a) return;
-  e.preventDefault();
-  const row = document.getElementById('src-' + a.dataset.id);
-  if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.remove('target'); void row.offsetWidth; row.classList.add('target'); }
+  const cite = e.target.closest('.cite');
+  const chartLink = e.target.closest('.chartlink');
+  const metricPill = e.target.closest('.pill:not(.chartlink)');
+  const flash = (el) => { if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('target'); void el.offsetWidth; el.classList.add('target'); } };
+  if (cite) { e.preventDefault(); flash(document.getElementById('src-' + cite.dataset.id)); }
+  else if (chartLink) { e.preventDefault(); flash(document.getElementById('chart-' + chartLink.dataset.cid)); }
+  else if (metricPill && metricPill.dataset.mid) { flash(document.getElementById('metric-' + metricPill.dataset.mid)); }
 });
 
-async function ask(question) {
+// ----- mode toggle -----
+function setMode(next) {
+  mode = next;
+  const portfolio = mode === 'portfolio';
+  document.getElementById('modeResearch').classList.toggle('active', !portfolio);
+  document.getElementById('modePortfolio').classList.toggle('active', portfolio);
+  dropzone.classList.toggle('hidden', !portfolio);
+  askBtn.textContent = portfolio ? 'Analyze' : 'Search';
+  q.placeholder = portfolio
+    ? 'Analyze my portfolio… or: 60% AAPL, 40% MSFT over 5 years'
+    : 'What changed in the AI search market this year?';
+  sub.innerHTML = portfolio
+    ? 'Upload a portfolio (or name tickers) and get <b>code-computed</b> risk/return metrics and interactive charts — every number is validated, never estimated by the model.'
+    : 'Ask anything. Get a research answer where <b>every claim traces to a real retrieved source</b> — citations are validated, not improvised.';
+  examplesEl.innerHTML = EXAMPLES[mode].map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('');
+}
+document.getElementById('modeResearch').addEventListener('click', () => setMode('research'));
+document.getElementById('modePortfolio').addEventListener('click', () => setMode('portfolio'));
+
+// ----- file upload -----
+dropzone.addEventListener('click', () => fileInput.click());
+['dragover', 'dragenter'].forEach(ev => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, () => dropzone.classList.remove('drag')));
+dropzone.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer.files.length) readFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) readFile(fileInput.files[0]); });
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const b64 = String(reader.result).split(',')[1] || '';
+    uploadedFile = { name: file.name, b64 };
+    fileName.textContent = '✓ ' + file.name + ' — will be analyzed on Analyze';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function ask() {
+  const question = q.value.trim();
+  const portfolio = mode === 'portfolio';
+  if (!question && !(portfolio && uploadedFile)) return;
+
   errorBox.classList.remove('show');
   results.classList.remove('show');
   statusEl.classList.add('show');
   askBtn.disabled = true;
-  statusText.textContent = 'Searching the web and grounding the answer…';
+  statusText.textContent = portfolio
+    ? 'Fetching prices and computing risk metrics…'
+    : 'Searching the web and grounding the answer…';
+
+  const payload = { question, portfolio_mode: portfolio };
+  if (portfolio && uploadedFile) { payload.file_b64 = uploadedFile.b64; payload.filename = uploadedFile.name; }
+
   try {
     const res = await fetch('/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
 
+    renderMetrics(data.metrics);                 // sets metricMap, used by inline chips
     answerEl.innerHTML = renderMarkdown(data.answer);
+    renderCharts(data.charts);
     renderSources(data.sources, data.cited_source_ids);
 
     if (data.validation.valid) {
       vbadge.className = 'vbadge ok';
-      vbadge.innerHTML = '&#10003; All citations verified against retrieved sources';
+      vbadge.innerHTML = portfolio
+        ? '&#10003; Every metric and chart is code-computed and validated'
+        : '&#10003; All citations verified against retrieved sources';
     } else {
       vbadge.className = 'vbadge fail';
-      vbadge.innerHTML = '&#10007; ' + escapeHtml((data.validation.errors || []).join('; ') || 'Citation validation failed');
+      vbadge.innerHTML = '&#10007; ' + escapeHtml((data.validation.errors || []).join('; ') || 'Validation failed');
     }
-    const searches = (data.tool_calls || []).filter(c => (c.name || '').includes('search') || (c.name || '').includes('tavily')).length;
-    stats.innerHTML = `<b>${data.sources.length}</b> sources · <b>${searches}</b> web search${searches === 1 ? '' : 'es'} · <b>${data.latency_seconds}s</b> · ${escapeHtml(data.model)}`;
+    const parts = [];
+    if (data.metrics && data.metrics.length) parts.push(`<b>${data.metrics.length}</b> metrics`);
+    if (data.charts && data.charts.length) parts.push(`<b>${data.charts.length}</b> charts`);
+    if (data.sources && data.sources.length) parts.push(`<b>${data.sources.length}</b> sources`);
+    parts.push(`<b>${data.latency_seconds}s</b>`);
+    parts.push(escapeHtml(data.model));
+    stats.innerHTML = parts.join(' · ');
 
     statusEl.classList.remove('show');
     results.classList.add('show');
@@ -511,11 +721,8 @@ async function ask(question) {
   }
 }
 
-form.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const question = q.value.trim();
-  if (question) ask(question);
-});
+form.addEventListener('submit', (e) => { e.preventDefault(); ask(); });
+setMode('research');
 
 // Cmd/Ctrl+Enter submits from the textarea.
 q.addEventListener('keydown', (e) => {

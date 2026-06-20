@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 portfolio = [
     "numpy>=2.4.6",
+    "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "plotly>=6.8.0",
     "scipy>=1.17.1",

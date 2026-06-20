@@ -346,6 +346,35 @@ class TestValidateCitations:
 
 
 # --------------------------------------------------------------------------------------
+# normalize_citation_markers (gpt-oss full-width 【n】 -> [n])
+# --------------------------------------------------------------------------------------
+
+class TestNormalizeCitationMarkers:
+    def test_single_fullwidth_marker(self):
+        assert tm.normalize_citation_markers("Paris 【1】.") == "Paris [1]."
+
+    def test_multiple_markers(self):
+        assert tm.normalize_citation_markers("a 【1】 b 【3】 c 【5】") == "a [1] b [3] c [5]"
+
+    def test_comma_list_expands(self):
+        assert tm.normalize_citation_markers("see 【1, 3】") == "see [1][3]"
+
+    def test_ascii_markers_untouched(self):
+        assert tm.normalize_citation_markers("already [1] fine") == "already [1] fine"
+
+    def test_structured_marker_left_for_validation_to_flag(self):
+        # 【1†L8-L15】 has extra structure -> NOT normalized, so validation still catches it.
+        text = "claim 【1†L8-L15】"
+        assert tm.normalize_citation_markers(text) == text
+
+    def test_normalized_text_then_passes_validation(self):
+        registry = tm.SourceRegistry()
+        registry.register([{"title": "S1", "url": "https://e.com/1"}])
+        answer = tm.ResearchAnswer(answer=tm.normalize_citation_markers("Fact 【1】."), cited_source_ids=[1])
+        assert tm.validate_citations(answer, registry).valid
+
+
+# --------------------------------------------------------------------------------------
 # validate_artifacts (sources + metrics)
 # --------------------------------------------------------------------------------------
 

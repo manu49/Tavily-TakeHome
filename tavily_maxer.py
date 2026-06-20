@@ -316,6 +316,21 @@ STRAY_MARKER_RE = re.compile(r"【[^】]*】")
 METRIC_MARKER_RE = re.compile(r"\[metric:(\d+)\]")
 CHART_MARKER_RE = re.compile(r"\[chart:(\d+)\]")
 
+# gpt-oss-120b frequently reverts to its pretrained full-width citation habit, emitting
+# 【1】 instead of [1] (often several per answer). When the content between the brackets is
+# just source-id number(s), that's a real citation wearing the wrong skin -- normalize it
+# deterministically to [n] rather than relying on the (flaky) model to reformat on a repair
+# turn. Markers with extra structure (e.g. 【1†L8-L15】) are left untouched so they still
+# fail validation as genuinely malformed.
+_FULLWIDTH_CITATION_RE = re.compile(r"【\s*(\d+(?:\s*,\s*\d+)*)\s*】")
+
+
+def normalize_citation_markers(text: str) -> str:
+    """Rewrite full-width numeric citation markers (【1】, 【1, 3】) to ASCII [1], [1][3]."""
+    return _FULLWIDTH_CITATION_RE.sub(
+        lambda m: "".join(f"[{n}]" for n in re.findall(r"\d+", m.group(1))), text
+    )
+
 
 @dataclass
 class ValidationResult:
@@ -709,6 +724,7 @@ def repair_invalid_citations(
         )
         if candidate is None:
             break
+        candidate.answer = normalize_citation_markers(candidate.answer)
         structured_response = candidate
         messages = state["messages"]
         validation = validate_artifacts(
@@ -759,6 +775,7 @@ def run_query(
         if structured_response is None:
             raise RuntimeError("Agent did not produce a structured ResearchAnswer.")
 
+        structured_response.answer = normalize_citation_markers(structured_response.answer)
         validation = validate_artifacts(
             structured_response, search_tool.registry, metric_registry, chart_registry
         )
@@ -981,6 +998,7 @@ def main(
                 console.print("[bold red]Agent did not produce a structured answer.[/bold red]")
                 raise typer.Exit(code=1)
 
+            structured_response.answer = normalize_citation_markers(structured_response.answer)
             validation = validate_citations(structured_response, search_tool.registry)
             if not validation.valid:
                 console.print("\n[dim yellow]Citation validation failed, asking the model to fix it...[/dim yellow]")

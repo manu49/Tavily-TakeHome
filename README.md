@@ -25,6 +25,57 @@ and a Vercel deployment. The full arc is in
 [`docs/improvements.md`](docs/improvements.md) and
 [`docs/developmental_stages.md`](docs/developmental_stages.md).
 
+## What this project built
+
+The assignment ([`docs/2606_Tavily_FDE_TakeHomeAssignment.md`](docs/2606_Tavily_FDE_TakeHomeAssignment.md))
+lists example directions for improving the starter agent. This project deliberately spans
+**all of them**, each grounded in working code rather than prose:
+
+**Adapt it to a specific customer workflow** — reframed from a generic search CLI into
+*Intelligence for Portfolio Managers*. A **Portfolio mode** ingests real holdings (CSV /
+Excel / `ticker,weight` or dollar-amount columns, with weights derived from market value)
+and returns code-computed risk/return analytics — annualized return, volatility, Sharpe,
+Sortino, max drawdown, VaR/CVaR — with interactive charts. See
+[`lib/portfolio_tool.py`](lib/portfolio_tool.py), [`lib/quant.py`](lib/quant.py), and
+[`docs/portfolio_analysis_design.md`](docs/portfolio_analysis_design.md).
+
+**Add a useful integration** — several: **yfinance** for live prices, **Plotly** for
+interactive charts, **ElevenLabs** speech-to-text for voice input (server-side; the key
+never reaches the browser), and a **Vercel** deployment serving the whole app from one WSGI
+entrypoint with zero extra web framework.
+
+**Improve retrieval quality** — the Tavily tool is wrapped to expose `search_depth`,
+`time_range`, `include_domains`, and a finance-aware `topic` (`general` / `news` /
+`finance`), and to **dedupe results by normalized URL** — fixing the duplicate-result bug
+the starter exhibited. See [`tavily_maxer.py`](tavily_maxer.py).
+
+**Improve source handling and citations** — a `SourceRegistry` assigns **code-owned** source
+IDs (never the model's), a `response_format=ResearchAnswer` schema forces structured
+`cited_source_ids`, and `validate_citations` deterministically checks that every `[n]` marker
+resolves to a real retrieved source. Full-width `【n】` markers are normalized to `[n]` in
+code, and a bounded **repair loop** feeds validation errors back to the model. The same
+guarantee extends to analytics: `referenced_metric_ids` / `referenced_chart_ids` are
+validated against the registries, so the model **cannot fabricate a number or a chart**.
+
+**Add an evaluation loop** — a golden question set spanning `simple_factual`,
+`recency_sensitive`, `comparison_synthesis`, `adversarial_no_source`, and `niche_factual`
+categories, run by [`evals/run_samples.py`](evals/run_samples.py) into a committed
+dataset ([`evals/dataset.md`](evals/dataset.md)) that records the deterministic
+citation-validity pass rate and latency per run — the same validation used in production.
+
+**Introduce a context-engineering improvement** — sources are handed to the model
+**pre-labeled** with their code-owned IDs (`[n] Title — url — snippet`) so it cites concrete
+retrieved items instead of inventing markers; the structured schema + repair turn keep
+generation grounded in that validated context; and the registry pattern is generalized to
+analytics, so the model references computed artifacts by `[metric:k]` / `[chart:j]` ID rather
+than restating values.
+
+**Improve observability / debuggability** — every run appends a structured line to
+[`logs/runs.jsonl`](logs/runs.jsonl) (question, tool calls, latency, validation outcome), so
+behavior is inspectable with no external service. When `LANGSMITH_TRACING=true`, runs are
+also traced in **LangSmith** with the citation-validity result attached as run feedback. The
+web UI surfaces a ✓/✗ validation badge plus source count, searches, latency, and model.
+
 ## Tech stack
 
 - **Python** — agent, analytics, and web server (standard-library `http.server`; no web

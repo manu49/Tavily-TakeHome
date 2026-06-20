@@ -2,6 +2,12 @@
 
 **Live app: https://tavily-take-home.vercel.app/**
 
+## Demo
+
+<video src="https://github.com/manu49/Tavily-TakeHome/raw/main/Demo/v3_Tavily_Maxer.mp4" controls width="100%"></video>
+
+> If the player doesn't load inline, [watch/download the demo video](Demo/v3_Tavily_Maxer.mp4).
+
 A productionized research-and-analytics web app for **portfolio managers**. Ask the web a
 question and get an answer where **every claim traces to a real, retrieved source**, or
 upload a portfolio and get **code-computed** risk/return analytics with interactive charts.

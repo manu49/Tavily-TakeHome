@@ -435,6 +435,12 @@ PAGE = r"""<!DOCTYPE html>
   .results.portfolio #overviewCard .answer { font-size: 15px; line-height: 1.6; max-height: 300px; overflow-y: auto; }
   .results.portfolio #overviewCard .answer h1, .results.portfolio #overviewCard .answer h2, .results.portfolio #overviewCard .answer h3 { font-size: 16px; }
   .results.portfolio .chart { width: 100%; }
+  /* headline metrics table at the top of the overview */
+  table.highlights { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 14px; }
+  table.highlights th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.highlights th:last-child, table.highlights .hv { text-align: right; }
+  table.highlights td { padding: 8px; border-bottom: 1px solid var(--border); }
+  table.highlights .hv { font-weight: 700; color: var(--accent-2); white-space: nowrap; }
   @media (max-width: 1024px) {
     .results.portfolio .trio { grid-template-columns: 1fr; grid-template-areas: "overview" "charts" "metrics"; }
     body.wide .wrap { max-width: 880px; }
@@ -482,6 +488,7 @@ PAGE = r"""<!DOCTYPE html>
       <div class="trio">
         <div class="card" id="overviewCard">
           <h2 id="answerHead">Answer</h2>
+          <div id="highlights"></div>
           <div class="answer" id="answer"></div>
         </div>
         <div class="card hidden" id="chartsCard">
@@ -535,7 +542,11 @@ const chartsCard = document.getElementById('chartsCard');
 const chartsEl = document.getElementById('charts');
 const metricsCard = document.getElementById('metricsCard');
 const metricsEl = document.getElementById('metrics');
+const highlightsEl = document.getElementById('highlights');
 const examplesEl = document.getElementById('examples');
+
+// The headline metrics shown as a table at the top of the overview, in this order.
+const HIGHLIGHT_KEYS = ['annualized_return', 'annualized_volatility', 'sharpe_ratio'];
 
 let mode = 'research';            // 'research' | 'portfolio'
 let uploadedFile = null;          // { name, b64 }
@@ -607,6 +618,18 @@ function renderSources(sources, cited) {
         <a href="${encodeURI(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.url)}</a>
       </div>
     </div>`).join('');
+}
+
+// A small, code-computed headline table at the top of the overview (no LLM, no drift).
+function renderHighlights(metrics) {
+  const byKey = {};
+  (metrics || []).forEach(m => { byKey[m.key] = m; });
+  const rows = HIGHLIGHT_KEYS.map(k => byKey[k]).filter(Boolean);
+  if (!rows.length) { highlightsEl.innerHTML = ''; return; }
+  highlightsEl.innerHTML =
+    '<table class="highlights"><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>' +
+    rows.map(m => `<tr><td>${escapeHtml(m.name)}</td><td class="hv">${escapeHtml(m.formatted)}</td></tr>`).join('') +
+    '</tbody></table>';
 }
 
 function renderMetrics(metrics) {
@@ -721,6 +744,7 @@ async function ask() {
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
 
     renderMetrics(data.metrics);                 // sets metricMap, used by inline chips
+    renderHighlights(data.metrics);              // headline table at top of overview
     answerEl.innerHTML = renderMarkdown(data.answer);
     renderCharts(data.charts);
     renderSources(data.sources, data.cited_source_ids);

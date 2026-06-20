@@ -376,7 +376,7 @@ PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>tavily_maxer — grounded web research</title>
+<title>Tavily Maxer… Intelligence for Portfolio Managers</title>
 <style>
   :root {
     --bg: #0b1020;
@@ -412,6 +412,7 @@ PAGE = r"""<!DOCTYPE html>
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); box-shadow: 0 0 10px var(--accent-2); }
   h1 { font-size: 40px; line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; }
   h1 .grad { background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .tag { font-size: 18px; font-weight: 600; color: var(--text); margin: 0 0 10px; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 17px; max-width: 620px; margin: 0 auto; }
   form {
     margin-top: 28px; background: var(--panel); border: 1px solid var(--border);
@@ -568,7 +569,8 @@ PAGE = r"""<!DOCTYPE html>
   <div class="wrap">
     <header>
       <div class="badge"><span class="dot"></span> Powered by Tavily web search · Nebius · LangChain</div>
-      <h1>tavily<span class="grad">_maxer</span></h1>
+      <h1>Tavily <span class="grad">Maxer</span></h1>
+      <p class="tag">Intelligence for Portfolio Managers</p>
       <p class="sub" id="sub">Ask anything. Get a research answer where <b>every claim traces to a real
       retrieved source</b> — citations are validated, not improvised.</p>
     </header>

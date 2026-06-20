@@ -10,15 +10,17 @@ dependencies = [
   "python-dotenv>=1.0.0",
   "rich>=13.0.0",
   "typer>=0.12.0",
-]
-
-[project.optional-dependencies]
-portfolio = [
-    "numpy>=2.4.6",
-    "openpyxl>=3.1.5",
-    "pandas>=3.0.3",
-    "plotly>=6.8.0",
-    "yfinance>=1.4.1",
+  # Portfolio stack. These must be in the main dependency list (not an optional extra)
+  # because Vercel's native Python runtime installs only [project.dependencies] -- an
+  # extra would be skipped and the analyze endpoint would ModuleNotFoundError on pandas.
+  # They're still imported lazily at runtime, so research requests don't pay for them.
+  # scipy is deliberately excluded (replaced by an in-house normal dist in quant.py) to
+  # keep the serverless bundle under Vercel's size limit.
+  "numpy>=2.0",
+  "pandas>=2.0",
+  "plotly>=6.0",
+  "yfinance>=0.2",
+  "openpyxl>=3.1",
 ]
 
 [dependency-groups]

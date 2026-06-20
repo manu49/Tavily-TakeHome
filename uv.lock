@@ -1916,17 +1916,13 @@ dependencies = [
     { name = "langchain-nebius" },
     { name = "langchain-tavily" },
     { name = "langsmith" },
-    { name = "python-dotenv" },
-    { name = "rich" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-portfolio = [
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "plotly" },
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "typer" },
     { name = "yfinance" },
 ]
 
@@ -1941,16 +1937,15 @@ requires-dist = [
     { name = "langchain-nebius", specifier = ">=0.1.0" },
     { name = "langchain-tavily", specifier = ">=0.2.0" },
     { name = "langsmith", specifier = ">=0.1.0" },
-    { name = "numpy", marker = "extra == 'portfolio'", specifier = ">=2.4.6" },
-    { name = "openpyxl", marker = "extra == 'portfolio'", specifier = ">=3.1.5" },
-    { name = "pandas", marker = "extra == 'portfolio'", specifier = ">=3.0.3" },
-    { name = "plotly", marker = "extra == 'portfolio'", specifier = ">=6.8.0" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "openpyxl", specifier = ">=3.1" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "plotly", specifier = ">=6.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
-    { name = "yfinance", marker = "extra == 'portfolio'", specifier = ">=1.4.1" },
+    { name = "yfinance", specifier = ">=0.2" },
 ]
-provides-extras = ["portfolio"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0.0" }]

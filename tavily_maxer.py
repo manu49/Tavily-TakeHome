@@ -592,6 +592,11 @@ metrics for a set of tickers and weights). When a question calls for it:
   analyst estimates via tavily_search [n], clearly labeled as estimates/assumptions.
 - State the assumptions behind a metric (risk-free rate, VaR confidence and horizon) where
   relevant. This is analysis, not investment advice.
+- Report the ACTUAL weights from get_uploaded_portfolio / analyze_portfolio. Never describe
+  a portfolio as "equal-weight" or invent percentages -- use the weights you were given.
+- Refer to each holding by its ticker symbol. Do NOT state a security's full name, asset
+  class, or type (e.g. stock vs ETF) unless you confirmed it via tavily_search -- never
+  guess what a ticker is.
 """
 
 

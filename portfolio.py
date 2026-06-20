@@ -31,8 +31,13 @@ THIRTY_DAYS_SECONDS = 30 * 24 * 3600
 # Flexible, case-insensitive header synonyms for tabular uploads.
 _TICKER_KEYS = {"ticker", "tickers", "symbol", "symbols", "stock", "security", "asset"}
 _WEIGHT_KEYS = {"weight", "weights", "allocation", "alloc", "%", "pct", "percent", "weight(%)", "weight %"}
-_QUANTITY_KEYS = {"quantity", "qty", "shares", "units", "amount", "position"}
-_COST_KEYS = {"cost", "costbasis", "cost basis", "avgcost", "price", "purchaseprice", "avg price"}
+_QUANTITY_KEYS = {"quantity", "qty", "shares", "units", "position"}
+# Market value / money columns -> weights are derived as value / total.
+_VALUE_KEYS = {
+    "value", "marketvalue", "dollaramount", "dollars", "dollar", "notional",
+    "positionvalue", "mv", "mktval", "usd", "exposure", "amount", "marketval",
+}
+_COST_KEYS = {"cost", "costbasis", "avgcost", "purchaseprice", "avgprice"}
 
 _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
@@ -43,6 +48,7 @@ class Holding:
     weight: Optional[float] = None
     quantity: Optional[float] = None
     cost_basis: Optional[float] = None
+    value: Optional[float] = None       # market/dollar value, if given
 
 
 @dataclass
@@ -153,14 +159,13 @@ def _build_portfolio_from_rows(
         if ticker in merged:
             warnings.append(f"Duplicate ticker {ticker}; merged.")
             existing = merged[ticker]
-            if r.get("weight") is not None:
-                existing.weight = (existing.weight or 0.0) + r["weight"]
-            if r.get("quantity") is not None:
-                existing.quantity = (existing.quantity or 0.0) + r["quantity"]
+            for fld in ("weight", "quantity", "value"):
+                if r.get(fld) is not None:
+                    setattr(existing, fld, (getattr(existing, fld) or 0.0) + r[fld])
         else:
             merged[ticker] = Holding(
-                ticker=ticker, weight=r.get("weight"),
-                quantity=r.get("quantity"), cost_basis=r.get("cost_basis"),
+                ticker=ticker, weight=r.get("weight"), quantity=r.get("quantity"),
+                cost_basis=r.get("cost_basis"), value=r.get("value"),
             )
 
     holdings = list(merged.values())
@@ -169,6 +174,7 @@ def _build_portfolio_from_rows(
         return None
 
     have_weight = [h for h in holdings if h.weight is not None]
+    have_value = [h for h in holdings if h.value is not None]
     have_qty = [h for h in holdings if h.quantity is not None]
 
     if have_weight and len(have_weight) == len(holdings):
@@ -182,10 +188,21 @@ def _build_portfolio_from_rows(
             warnings.append(
                 f"Weights sum to {raw_total:.3f}, not 1.0; they will be normalized."
             )
+    elif have_value and len(have_value) == len(holdings):
+        # Market values -> weights proportional to dollar amount.
+        total_value = sum(h.value for h in holdings)
+        if total_value <= 0:
+            warnings.append("Market values are non-positive; assuming equal weight.")
+            for h in holdings:
+                h.weight = 1.0 / len(holdings)
+        else:
+            for h in holdings:
+                h.weight = h.value / total_value
+            warnings.append("Weights derived from the market-value/dollar-amount column.")
     elif have_qty and len(have_qty) == len(holdings):
         warnings.append("No weights given; weights will be derived from quantities and live prices.")
     else:
-        warnings.append("No usable weights or quantities; assuming equal weight.")
+        warnings.append("No usable weights, values, or quantities; assuming equal weight.")
         for h in holdings:
             h.weight = 1.0 / len(holdings)
 
@@ -199,7 +216,13 @@ def _parse_tabular(content: bytes, filename: str, warnings, errors) -> List[dict
     if filename.lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(buffer)
     else:
-        df = pd.read_csv(buffer)
+        # Auto-detect the delimiter (comma, tab, semicolon) so tab-separated exports work;
+        # fall back to a plain comma read for single-column files the sniffer can't handle.
+        try:
+            df = pd.read_csv(buffer, sep=None, engine="python")
+        except Exception:
+            buffer.seek(0)
+            df = pd.read_csv(buffer)
 
     if df.empty:
         return []
@@ -211,6 +234,8 @@ def _parse_tabular(content: bytes, filename: str, warnings, errors) -> List[dict
             colmap[col] = "ticker"
         elif key in _WEIGHT_KEYS:
             colmap[col] = "weight"
+        elif key in _VALUE_KEYS:
+            colmap[col] = "value"
         elif key in _QUANTITY_KEYS:
             colmap[col] = "quantity"
         elif key in _COST_KEYS:

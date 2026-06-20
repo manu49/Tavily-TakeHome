@@ -66,6 +66,25 @@ class TestParseCSV:
         result = pf.parse_portfolio(b"ticker,weight\nAAPL,0.5\n!!!,0.5", "p.csv")
         assert result.portfolio.tickers() == ["AAPL"]
 
+    def test_dollar_amount_column_drives_weights(self):
+        # The reported case: a "Dollar Amount" column must yield value-proportional weights,
+        # not equal weight. 300M / 304M and 4M / 304M.
+        result = pf.parse_portfolio(b"Ticker,Dollar Amount\nAAPL,300000000\nSPCX,4000000", "p.csv")
+        assert result.ok
+        w = result.portfolio.normalized_weights()
+        assert w["AAPL"] == pytest.approx(300 / 304, abs=1e-4)
+        assert w["SPCX"] == pytest.approx(4 / 304, abs=1e-4)
+        assert any("market-value" in x for x in result.warnings)
+
+    def test_market_value_header_variant(self):
+        result = pf.parse_portfolio(b"symbol,Market Value\nAAPL,750\nMSFT,250", "p.csv")
+        assert result.portfolio.normalized_weights() == pytest.approx({"AAPL": 0.75, "MSFT": 0.25})
+
+    def test_tab_separated_with_dollar_amount(self):
+        result = pf.parse_portfolio(b"Ticker\tDollar Amount\nAAPL\t300000000\nSPCX\t4000000", "p.csv")
+        assert result.ok
+        assert result.portfolio.normalized_weights()["AAPL"] == pytest.approx(300 / 304, abs=1e-4)
+
 
 # --------------------------------------------------------------------------------------
 # Excel parsing

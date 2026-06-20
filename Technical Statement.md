@@ -1,5 +1,15 @@
 # Technical Statement — Tavily Maxer
 
+## Business context
+
+Portfolio managers live on two jobs: **researching new investment opportunities** and
+**analyzing the portfolios they already hold**. Both are revenue-sensitive and
+time-critical — an allocation decision moves real money, and acting on a stale or fabricated
+fact is expensive. So the bar isn't "a helpful answer"; it's **precise, verifiable sourcing
+from the live web**, plus analytics they can trust. Tavily Maxer targets exactly that
+workflow: sourced research *and* code-computed portfolio analytics, where every claim and
+every number is auditable rather than improvised.
+
 ## The problem
 
 The starter agent could search the web but couldn't *prove* anything it said. In testing it

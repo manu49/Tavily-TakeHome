@@ -43,6 +43,9 @@ import base64
 import json
 import os
 import traceback
+import urllib.error
+import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dotenv import load_dotenv
@@ -130,6 +133,69 @@ def process_ask(payload: dict) -> tuple[int, dict]:
     return 200, out
 
 
+# --------------------------------------------------------------------------------------
+# Speech-to-text bridge: ElevenLabs transcription for the mic button on the page.
+# --------------------------------------------------------------------------------------
+
+ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+ELEVENLABS_STT_MODEL = "scribe_v1"
+
+# Map browser MediaRecorder MIME types to a sensible upload filename extension.
+_AUDIO_EXT = {
+    "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "mp4",
+    "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
+}
+
+
+def process_transcribe(audio: bytes, content_type: str) -> tuple[int, dict]:
+    """Forward recorded mic audio to ElevenLabs Speech-to-Text and return {"text": ...}.
+
+    The ELEVENLABS_API_KEY stays server-side (same pattern as TAVILY/NEBIUS): the browser
+    only ever uploads raw audio bytes, never the key. Built on stdlib urllib so the
+    project's dependency footprint is unchanged."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        return 500, {"error": "Voice input is unavailable: ELEVENLABS_API_KEY is not set on the server."}
+    if not audio:
+        return 400, {"error": "No audio received."}
+
+    mime = (content_type or "audio/webm").split(";")[0].strip()
+    ext = _AUDIO_EXT.get(mime, "webm")
+
+    # Build a multipart/form-data body by hand (no `requests`/SDK dependency).
+    boundary = uuid.uuid4().hex
+    preamble = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="model_id"\r\n\r\n'
+        f"{ELEVENLABS_STT_MODEL}\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="audio.{ext}"\r\n'
+        f"Content-Type: {mime}\r\n\r\n"
+    ).encode("utf-8")
+    epilogue = f"\r\n--{boundary}--\r\n".encode("utf-8")
+    body = preamble + audio + epilogue
+
+    req = urllib.request.Request(
+        ELEVENLABS_STT_URL,
+        data=body,
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:500]
+        return 502, {"error": f"ElevenLabs returned {exc.code}: {detail}"}
+    except urllib.error.URLError as exc:
+        return 502, {"error": f"Could not reach ElevenLabs: {exc.reason}"}
+
+    return 200, {"text": (data.get("text") or "").strip()}
+
+
 def load_page() -> bytes:
     return PAGE.encode("utf-8")
 
@@ -172,6 +238,22 @@ def app(environ, start_response):
         return _wsgi_bytes(start_response, 200, load_page(), "text/html; charset=utf-8")
     if method == "GET" and path == "/healthz":
         return _wsgi_json(start_response, 200, {"ok": True})
+
+    if path == "/api/transcribe":
+        if method != "POST":
+            return _wsgi_json(start_response, 405, {"error": "POST audio bytes to /api/transcribe."})
+        try:
+            size = int(environ.get("CONTENT_LENGTH") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        audio = environ["wsgi.input"].read(size) if size > 0 else b""
+        try:
+            status, body = process_transcribe(audio, environ.get("CONTENT_TYPE", ""))
+            return _wsgi_json(start_response, status, body)
+        except Exception as exc:
+            traceback.print_exc()
+            return _wsgi_json(start_response, 500, {"error": f"{type(exc).__name__}: {exc}"})
+
     if path != "/api/ask":
         return _wsgi_json(start_response, 404, {"error": "not found"})
     if method != "POST":
@@ -223,6 +305,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/transcribe":
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            audio = self.rfile.read(length) if length > 0 else b""
+            try:
+                status, body = process_transcribe(audio, self.headers.get("Content-Type", ""))
+                self._send_json(status, body)
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
+            return
+
         if self.path != "/api/ask":
             self._send_json(404, {"error": "not found"})
             return
@@ -257,6 +350,10 @@ def main() -> None:
         print(f"[webapp] WARNING: missing {', '.join(missing)} — searches will fail until set.")
         print("[webapp]   export TAVILY_API_KEY='tvly-...'  (https://app.tavily.com)")
         print("[webapp]   export NEBIUS_API_KEY='...'        (https://tokenfactory.nebius.com)")
+
+    if not os.getenv("ELEVENLABS_API_KEY"):
+        print("[webapp] NOTE: ELEVENLABS_API_KEY not set — the mic / voice input will be disabled.")
+        print("[webapp]   export ELEVENLABS_API_KEY='...'    (https://elevenlabs.io)")
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
@@ -328,6 +425,15 @@ PAGE = r"""<!DOCTYPE html>
   }
   button.ask:hover { transform: translateY(-1px); }
   button.ask:disabled { opacity: .5; cursor: default; transform: none; }
+  button.mic {
+    align-self: flex-end; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    font-size: 16px; line-height: 1; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  button.mic:hover { border-color: var(--accent); }
+  button.mic:disabled { opacity: .4; cursor: default; }
+  button.mic.recording { border-color: var(--bad); background: rgba(255,107,107,.12); animation: micpulse 1.1s ease-in-out infinite; }
+  @keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,.5); } 50% { box-shadow: 0 0 0 6px rgba(255,107,107,0); } }
   .examples { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
   .chip {
     font-size: 13px; color: var(--muted); background: var(--chip);
@@ -470,6 +576,7 @@ PAGE = r"""<!DOCTYPE html>
 
     <form id="form">
       <textarea id="q" placeholder="What changed in the AI search market this year?" rows="1"></textarea>
+      <button class="mic" id="mic" type="button" title="Speak your question (ElevenLabs)" aria-label="Record voice question">&#127908;</button>
       <button class="ask" id="ask" type="submit">Search</button>
     </form>
 
@@ -528,6 +635,7 @@ PAGE = r"""<!DOCTYPE html>
 const form = document.getElementById('form');
 const q = document.getElementById('q');
 const askBtn = document.getElementById('ask');
+const micBtn = document.getElementById('mic');
 const statusEl = document.getElementById('status');
 const statusText = document.getElementById('statusText');
 const results = document.getElementById('results');
@@ -808,6 +916,81 @@ async function ask() {
     askBtn.disabled = false;
   }
 }
+
+// ----- voice input (ElevenLabs speech-to-text) -----
+// Record from the mic with MediaRecorder, POST the raw audio to /api/transcribe (the
+// server holds the ElevenLabs key), then drop the transcript into the textarea for the
+// user to review and Search. Needs a secure context (localhost or HTTPS).
+let mediaRecorder = null;
+let audioChunks = [];
+
+if (!navigator.mediaDevices || !window.MediaRecorder) {
+  micBtn.disabled = true;
+  micBtn.title = 'Voice input needs a secure (HTTPS/localhost) context and a supported browser.';
+}
+
+async function startRecording() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    errorText.textContent = 'Microphone access was denied or unavailable.';
+    errorBox.classList.add('show');
+    return;
+  }
+  audioChunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.addEventListener('dataavailable', (e) => { if (e.data.size) audioChunks.push(e.data); });
+  mediaRecorder.addEventListener('stop', async () => {
+    stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    await transcribe(blob);
+  });
+  mediaRecorder.start();
+  micBtn.classList.add('recording');
+  micBtn.title = 'Stop and transcribe';
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  micBtn.classList.remove('recording');
+}
+
+async function transcribe(blob) {
+  errorBox.classList.remove('show');
+  micBtn.disabled = true;
+  const prevTitle = micBtn.title;
+  micBtn.title = 'Transcribing…';
+  try {
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    const text = (data.text || '').trim();
+    if (text) {
+      q.value = q.value.trim() ? (q.value.trim() + ' ' + text) : text;
+      q.dispatchEvent(new Event('input'));
+      q.focus();
+    } else {
+      errorText.textContent = 'No speech was detected. Try again.';
+      errorBox.classList.add('show');
+    }
+  } catch (err) {
+    errorText.textContent = err.message;
+    errorBox.classList.add('show');
+  } finally {
+    micBtn.disabled = false;
+    micBtn.title = 'Speak your question (ElevenLabs)';
+  }
+}
+
+micBtn.addEventListener('click', () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+  else startRecording();
+});
 
 form.addEventListener('submit', (e) => { e.preventDefault(); ask(); });
 setMode('research');

@@ -22,6 +22,14 @@ TAVILY_API_KEY="tvly-..."
 NEBIUS_API_KEY="..."
 ```
 
+Optional — for **voice input** (the 🎤 mic button in the web demo), add an
+[ElevenLabs](https://elevenlabs.io) key. Without it the mic is simply disabled; search and
+portfolio analysis work unchanged.
+
+```bash
+ELEVENLABS_API_KEY="..."
+```
+
 ## CLI
 
 ```bash
@@ -50,6 +58,10 @@ What it does:
   search runs live Tavily web search → Nebius synthesis → citation validation.
 - **Clickable citations.** `[n]` markers in the answer become chips that scroll to and
   highlight the matching source.
+- **Voice input (optional).** Click the 🎤 mic to dictate a question: the browser records
+  audio, `POST /api/transcribe` forwards it to ElevenLabs speech-to-text (the key stays
+  server-side), and the transcript drops into the box for you to review and search. Enabled
+  only when `ELEVENLABS_API_KEY` is set; needs a secure context (localhost or HTTPS).
 - **Verification badge + stats.** Shows ✓/✗ validation, source count, number of web
   searches, latency, and the model used.
 - **Zero extra dependencies.** Built on the Python standard-library `http.server` with one
@@ -58,7 +70,7 @@ What it does:
   startup if either is missing.
 
 Endpoints: `GET /` (the page), `POST /api/ask` (`{"question": "..."}` → JSON result),
-`GET /healthz`.
+`POST /api/transcribe` (raw audio bytes → `{"text": "..."}`, voice input), `GET /healthz`.
 
 ### Can I host this on GitHub Pages?
 
@@ -103,6 +115,7 @@ asset for Vercel to bundle.
    environments:
    - `TAVILY_API_KEY` — your `tvly-...` key
    - `NEBIUS_API_KEY` — your Nebius key
+   - *(optional)* `ELEVENLABS_API_KEY` — enables the 🎤 voice-input button
    - *(optional)* `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`
 4. **Deploy.** Vercel builds and gives you a `https://<project>.vercel.app` URL. If you
    added the env vars after the first deploy, trigger a redeploy so they take effect.
@@ -128,3 +141,6 @@ ever hits the function time limit, raise it under Project → Settings → Funct
 uv run pytest                    # offline unit tests (no API calls)
 uv run evals/run_samples.py      # live sample runs against the golden question set
 ```
+
+## Traces
+https://traces.com/

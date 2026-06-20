@@ -265,6 +265,14 @@ class ResearchAnswer(BaseModel):
         default_factory=list,
         description="Every source id referenced anywhere in `answer`, deduplicated.",
     )
+    referenced_metric_ids: List[int] = Field(
+        default_factory=list,
+        description=(
+            "Every metric id referenced in `answer` as [metric:k], deduplicated. Only used "
+            "for quantitative/portfolio questions where the analyze_portfolio tool returned "
+            "metrics; leave empty for pure web-research answers."
+        ),
+    )
 
 
 SYSTEM_PROMPT = """You are a meticulous research assistant backed by Tavily web search.
@@ -295,6 +303,11 @@ Rules:
 # would silently pass that answer.
 STRAY_MARKER_RE = re.compile(r"【[^】]*】")
 
+# Metric references are syntactically distinct from source citations: `[metric:3]` vs `[3]`.
+# CITATION_MARKER_RE (\[(\d+)\]) cannot match `[metric:3]`, so the two namespaces never
+# collide -- a number can be both source id 3 and metric id 3 without ambiguity.
+METRIC_MARKER_RE = re.compile(r"\[metric:(\d+)\]")
+
 
 @dataclass
 class ValidationResult:
@@ -304,6 +317,9 @@ class ValidationResult:
     missing_ids: set[int] = field(default_factory=set)
     stray_markers: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    declared_metric_ids: set[int] = field(default_factory=set)
+    inline_metric_ids: set[int] = field(default_factory=set)
+    missing_metric_ids: set[int] = field(default_factory=set)
 
     def to_dict(self) -> dict:
         return {
@@ -313,29 +329,45 @@ class ValidationResult:
             "missing_ids": sorted(self.missing_ids),
             "stray_markers": self.stray_markers,
             "errors": self.errors,
+            "declared_metric_ids": sorted(self.declared_metric_ids),
+            "inline_metric_ids": sorted(self.inline_metric_ids),
+            "missing_metric_ids": sorted(self.missing_metric_ids),
         }
 
 
-def validate_citations(answer: ResearchAnswer, registry: SourceRegistry) -> ValidationResult:
-    """Deterministic post-hoc check, run after every response:
+def validate_artifacts(
+    answer: ResearchAnswer,
+    source_registry: SourceRegistry,
+    metric_registry: Optional[Any] = None,
+) -> ValidationResult:
+    """Deterministic post-hoc check over every code-owned artifact the answer references:
 
-    1. Every id the model cited (declared in `cited_source_ids` or used inline as
-       `[n]`) must exist in the registry. Since the registry only ever contains URLs
-       Tavily actually returned, a pass means zero hallucinated sources -- not just
-       "looks plausible".
-    2. The answer must not contain any non-`[n]` citation-shaped marker (e.g. `【1†...】`)
-       -- those are improvised and point at nothing, regardless of whether the
-       declared ids happen to be valid.
+    1. Every cited source id (declared in `cited_source_ids` or inline `[n]`) must exist in
+       the SourceRegistry -- a pass means zero hallucinated sources, by construction.
+    2. Every referenced metric id (declared in `referenced_metric_ids` or inline
+       `[metric:k]`) must exist in the MetricRegistry -- a pass means zero fabricated
+       numbers, by construction. When no metric_registry is given (pure research run), any
+       metric reference is treated as invalid.
+    3. The answer must contain no improvised, non-`[n]` citation-shaped marker (e.g.
+       `【1†...】`).
     """
-    valid_ids = registry.ids()
+    valid_ids = source_registry.ids()
     declared = set(answer.cited_source_ids)
     inline = {int(m) for m in CITATION_MARKER_RE.findall(answer.answer)}
     missing = (declared | inline) - valid_ids
+
+    valid_metric_ids = metric_registry.ids() if metric_registry is not None else set()
+    declared_metric = set(getattr(answer, "referenced_metric_ids", []) or [])
+    inline_metric = {int(m) for m in METRIC_MARKER_RE.findall(answer.answer)}
+    missing_metric = (declared_metric | inline_metric) - valid_metric_ids
+
     stray_markers = STRAY_MARKER_RE.findall(answer.answer)
 
     errors: List[str] = []
     if missing:
         errors.append(f"Cited source id(s) not found in registry: {sorted(missing)}")
+    if missing_metric:
+        errors.append(f"Referenced metric id(s) not found in registry: {sorted(missing_metric)}")
     if stray_markers:
         errors.append(f"Non-standard citation marker(s) found (expected [n]): {stray_markers}")
 
@@ -346,7 +378,19 @@ def validate_citations(answer: ResearchAnswer, registry: SourceRegistry) -> Vali
         missing_ids=missing,
         stray_markers=stray_markers,
         errors=errors,
+        declared_metric_ids=declared_metric,
+        inline_metric_ids=inline_metric,
+        missing_metric_ids=missing_metric,
     )
+
+
+def validate_citations(answer: ResearchAnswer, registry: SourceRegistry) -> ValidationResult:
+    """Source-only validation (backward-compatible wrapper around validate_artifacts).
+
+    Used by the research-only paths; equivalent to validate_artifacts with no metric
+    registry.
+    """
+    return validate_artifacts(answer, registry, metric_registry=None)
 
 
 # --------------------------------------------------------------------------------------
@@ -489,19 +533,54 @@ def coerce_research_answer(messages: List[Any]) -> Optional[ResearchAnswer]:
     return None
 
 
-def build_agent(model: str = DEFAULT_MODEL, *, streaming: bool = True):
-    """Build a fresh agent + its (fresh) wrapped search tool. A new tool instance is
-    returned each call so its SourceRegistry starts empty -- registries must not leak
-    citation ids across unrelated runs."""
+PORTFOLIO_PROMPT_SUFFIX = """
+
+You also have an `analyze_portfolio` tool for quantitative portfolio questions (risk/return
+metrics for a set of tickers and weights). When a question calls for it:
+- Call `analyze_portfolio` instead of computing any numbers yourself. It returns metrics
+  pre-labeled with stable ids like [metric:3]. You must NEVER compute or estimate a Sharpe
+  ratio, volatility, VaR, or any other figure on your own -- only report ids it returned.
+- Cite every quantitative claim with the exact [metric:k] id, e.g. "The portfolio's Sharpe
+  ratio is 0.51 [metric:3]." Populate referenced_metric_ids with every id you cited.
+- For a forward-looking question (e.g. "expected return next year"), do not assert a single
+  fabricated forecast: present the historical metrics you computed AND, if useful, sourced
+  analyst estimates via tavily_search [n], clearly labeled as estimates/assumptions.
+- State the assumptions behind a metric (risk-free rate, VaR confidence and horizon) where
+  relevant. This is analysis, not investment advice.
+"""
+
+
+def build_agent(
+    model: str = DEFAULT_MODEL, *, streaming: bool = True, enable_portfolio: bool = False
+):
+    """Build a fresh agent and its (fresh) tool instances. New tools are returned each call
+    so their registries start empty -- artifact ids must not leak across unrelated runs.
+
+    Returns (agent, search_tool, portfolio_tool). `portfolio_tool` is None unless
+    `enable_portfolio` is set; when set, the heavy quant stack (quant/marketdata via the
+    `portfolio` extra) is imported lazily so the research-only path and the Vercel deploy
+    never pay for it.
+    """
     chat_model = FixedChatNebius(model=model, streaming=streaming)
     search_tool = TavilySearchWithRegistry()
+    tools: List[Any] = [search_tool]
+    portfolio_tool = None
+    system_prompt = SYSTEM_PROMPT
+
+    if enable_portfolio:
+        from portfolio_tool import PortfolioAnalysisTool
+
+        portfolio_tool = PortfolioAnalysisTool()
+        tools.append(portfolio_tool)
+        system_prompt = SYSTEM_PROMPT + PORTFOLIO_PROMPT_SUFFIX
+
     agent = create_agent(
         model=chat_model,
-        tools=[search_tool],
-        system_prompt=SYSTEM_PROMPT,
+        tools=tools,
+        system_prompt=system_prompt,
         response_format=ResearchAnswer,
     )
-    return agent, search_tool
+    return agent, search_tool, portfolio_tool
 
 
 @dataclass
@@ -514,6 +593,7 @@ class RunResult:
     tool_calls: List[dict]
     latency_seconds: float
     run_id: Optional[str] = None
+    metric_registry: Optional[Any] = None  # MetricRegistry when the portfolio tool ran
 
     def to_log_record(self) -> dict:
         return {
@@ -523,6 +603,7 @@ class RunResult:
             "answer": self.answer.answer,
             "cited_source_ids": sorted(set(self.answer.cited_source_ids)),
             "num_sources": len(self.registry),
+            "num_metrics": len(self.metric_registry) if self.metric_registry is not None else 0,
             "tool_calls": self.tool_calls,
             "latency_seconds": round(self.latency_seconds, 3),
             "validation": self.validation.to_dict(),
@@ -548,6 +629,7 @@ def repair_invalid_citations(
     validation: ValidationResult,
     *,
     max_attempts: int = 2,
+    metric_registry: Optional[Any] = None,
 ) -> tuple[ResearchAnswer, ValidationResult, List[Any]]:
     """Give the model a bounded chance to fix its own citation mistakes.
 
@@ -562,14 +644,22 @@ def repair_invalid_citations(
     attempts = 0
     while not validation.valid and attempts < max_attempts:
         attempts += 1
+        metric_hint = ""
+        if metric_registry is not None:
+            metric_hint = (
+                f" Valid metric ids are {sorted(metric_registry.ids())}; reference them only as "
+                "[metric:k]."
+            )
         repair_message = {
             "role": "user",
             "content": (
-                "Your last answer failed citation validation: "
+                "Your last answer failed validation: "
                 + "; ".join(validation.errors)
-                + f". Valid source ids in this conversation are {sorted(search_tool.registry.ids())}. "
-                "Rewrite the answer using ONLY plain ASCII [n] markers for citations (no other "
-                "citation style), citing only those valid ids, and call the ResearchAnswer tool again."
+                + f". Valid source ids in this conversation are {sorted(search_tool.registry.ids())}."
+                + metric_hint
+                + " Rewrite the answer using ONLY plain ASCII [n] markers for source citations "
+                "(no other citation style), citing only valid ids, and call the ResearchAnswer "
+                "tool again."
             ),
         }
         messages = messages + [repair_message]
@@ -581,7 +671,7 @@ def repair_invalid_citations(
             break
         structured_response = candidate
         messages = state["messages"]
-        validation = validate_citations(structured_response, search_tool.registry)
+        validation = validate_artifacts(structured_response, search_tool.registry, metric_registry)
 
     return structured_response, validation, messages
 
@@ -594,15 +684,23 @@ def run_query(
     model: str = DEFAULT_MODEL,
     log: bool = True,
     repair_attempts: int = 2,
+    enable_portfolio: bool = False,
+    portfolio_tool=None,
 ) -> RunResult:
     """Run one question through the agent end-to-end (no console streaming) and return
     a structured RunResult. This is the path used by the eval/dataset script and by
     tests; the CLI below wraps the same agent with live streaming for interactive use.
 
-    Set log=False to skip the JSONL/LangSmith side effects (used by unit tests so they
-    don't pollute logs/runs.jsonl)."""
+    Set enable_portfolio=True to give the agent the analyze_portfolio tool (quant metrics);
+    its MetricRegistry is then validated alongside source citations and attached to the
+    RunResult. Set log=False to skip the JSONL/LangSmith side effects (used by unit tests so
+    they don't pollute logs/runs.jsonl)."""
     if agent is None or search_tool is None:
-        agent, search_tool = build_agent(model=model, streaming=False)
+        agent, search_tool, portfolio_tool = build_agent(
+            model=model, streaming=False, enable_portfolio=enable_portfolio
+        )
+
+    metric_registry = portfolio_tool.registry if portfolio_tool is not None else None
 
     start = time.perf_counter()
     with collect_runs() as run_collector:
@@ -617,12 +715,12 @@ def run_query(
         if structured_response is None:
             raise RuntimeError("Agent did not produce a structured ResearchAnswer.")
 
-        validation = validate_citations(structured_response, search_tool.registry)
+        validation = validate_artifacts(structured_response, search_tool.registry, metric_registry)
         messages = state["messages"]
         if repair_attempts > 0:
             structured_response, validation, messages = repair_invalid_citations(
                 agent, search_tool, messages, structured_response, validation,
-                max_attempts=repair_attempts,
+                max_attempts=repair_attempts, metric_registry=metric_registry,
             )
     latency = time.perf_counter() - start
 
@@ -638,6 +736,7 @@ def run_query(
         tool_calls=tool_calls,
         latency_seconds=latency,
         run_id=run_id,
+        metric_registry=metric_registry,
     )
 
     if log:
@@ -755,7 +854,7 @@ def main(
     )
 
     question_text = " ".join(question)
-    agent, search_tool = build_agent(model=model, streaming=True)
+    agent, search_tool, _portfolio_tool = build_agent(model=model, streaming=True)
 
     console.print(Panel.fit(question_text, title="Question", border_style="cyan"))
     console.rule("[bold blue]Agent stream")

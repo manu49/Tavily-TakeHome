@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from typer.testing import CliRunner
 
 import tavily_maxer as tm
+from artifacts import MetricRegistry
 
 runner = CliRunner()
 
@@ -342,6 +343,53 @@ class TestValidateCitations:
         answer = tm.ResearchAnswer(answer="Claim [1].", cited_source_ids=[1])
         result = tm.validate_citations(answer, registry)
         json.dumps(result.to_dict())  # must not raise
+
+
+# --------------------------------------------------------------------------------------
+# validate_artifacts (sources + metrics)
+# --------------------------------------------------------------------------------------
+
+class TestValidateArtifacts:
+    def make_metric_registry(self, n: int):
+        reg = MetricRegistry()
+        for i in range(n):
+            reg.register(f"k{i}", f"Metric {i}", 0.1 * i, "ratio", "def")
+        return reg
+
+    def make_source_registry(self, n: int):
+        registry = tm.SourceRegistry()
+        registry.register([{"title": f"S{i}", "url": f"https://e.com/{i}"} for i in range(n)])
+        return registry
+
+    def test_valid_sources_and_metrics_together(self):
+        answer = tm.ResearchAnswer(
+            answer="Fact [1] and Sharpe is high [metric:1].",
+            cited_source_ids=[1],
+            referenced_metric_ids=[1],
+        )
+        result = tm.validate_artifacts(answer, self.make_source_registry(1), self.make_metric_registry(1))
+        assert result.valid
+        assert result.inline_metric_ids == {1}
+
+    def test_inline_metric_markers_are_detected(self):
+        answer = tm.ResearchAnswer(answer="See [metric:2] and [metric:3].")
+        result = tm.validate_artifacts(answer, tm.SourceRegistry(), self.make_metric_registry(5))
+        assert result.inline_metric_ids == {2, 3}
+        assert result.valid
+
+    def test_missing_metric_id_fails_but_isolates_from_sources(self):
+        answer = tm.ResearchAnswer(answer="Good source [1], bad metric [metric:9].", cited_source_ids=[1])
+        result = tm.validate_artifacts(answer, self.make_source_registry(1), self.make_metric_registry(2))
+        assert not result.valid
+        assert result.missing_ids == set()           # source side is fine
+        assert result.missing_metric_ids == {9}       # metric side caught it
+
+    def test_metric_marker_does_not_trip_source_citation_regex(self):
+        # `[metric:3]` must NOT be read as source citation `[3]`.
+        answer = tm.ResearchAnswer(answer="Only a metric here [metric:3].")
+        result = tm.validate_artifacts(answer, tm.SourceRegistry(), self.make_metric_registry(3))
+        assert result.inline_ids == set()
+        assert result.inline_metric_ids == {3}
 
 
 # --------------------------------------------------------------------------------------

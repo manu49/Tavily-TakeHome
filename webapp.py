@@ -417,20 +417,26 @@ PAGE = r"""<!DOCTYPE html>
   .chart .cap { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
   .chart.target { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
 
-  /* portfolio dashboard layout: Overview | Charts | Metrics side by side */
+  /* portfolio dashboard: compact overview on top, then charts + metrics side by side */
   .trio { display: block; }
-  body.wide .wrap { max-width: 1360px; }
+  body.wide .wrap { max-width: 1280px; }
   .results.portfolio .trio {
     display: grid;
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.55fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+    grid-template-areas: "overview overview" "charts metrics";
     gap: 18px; align-items: start;
   }
-  .results.portfolio .trio .card { margin-bottom: 0; }
-  /* overview made smaller: narrower column + compact, scrollable body */
-  .results.portfolio .answer { font-size: 15px; line-height: 1.6; max-height: 72vh; overflow-y: auto; }
-  .results.portfolio .answer h1, .results.portfolio .answer h2, .results.portfolio .answer h3 { font-size: 16px; }
+  .results.portfolio #overviewCard { grid-area: overview; }
+  .results.portfolio #chartsCard { grid-area: charts; }
+  .results.portfolio #metricsCard { grid-area: metrics; }
+  /* min-width:0 lets grid cells shrink; overflow:hidden stops a chart from spilling over */
+  .results.portfolio .trio .card { margin-bottom: 0; min-width: 0; overflow: hidden; }
+  /* overview made smaller: full width but compact and scrollable */
+  .results.portfolio #overviewCard .answer { font-size: 15px; line-height: 1.6; max-height: 300px; overflow-y: auto; }
+  .results.portfolio #overviewCard .answer h1, .results.portfolio #overviewCard .answer h2, .results.portfolio #overviewCard .answer h3 { font-size: 16px; }
+  .results.portfolio .chart { width: 100%; }
   @media (max-width: 1024px) {
-    .results.portfolio .trio { grid-template-columns: 1fr; }  /* stack on narrow screens */
+    .results.portfolio .trio { grid-template-columns: 1fr; grid-template-areas: "overview" "charts" "metrics"; }
     body.wide .wrap { max-width: 880px; }
   }
 </style>
@@ -474,7 +480,7 @@ PAGE = r"""<!DOCTYPE html>
 
     <div class="results" id="results">
       <div class="trio">
-        <div class="card">
+        <div class="card" id="overviewCard">
           <h2 id="answerHead">Answer</h2>
           <div class="answer" id="answer"></div>
         </div>
@@ -625,13 +631,21 @@ function renderCharts(charts) {
   charts.forEach(c => {
     const spec = c.spec || {};
     try {
-      Plotly.newPlot('chart-' + c.id, spec.data || [], spec.layout || {},
+      Plotly.newPlot('chart-' + c.id, spec.data || [], Object.assign({ autosize: true }, spec.layout || {}),
                      { responsive: true, displayModeBar: false });
     } catch (e) {
       document.getElementById('chart-' + c.id).textContent = 'Could not render chart.';
     }
   });
 }
+
+// Plotly measures the container at plot time; since charts are first drawn while #results
+// is still display:none, they come out at a default width and overflow. Re-fit them once the
+// panel is visible and the grid has settled (and on any window resize).
+function resizeCharts() {
+  document.querySelectorAll('.chart').forEach(d => { try { Plotly.Plots.resize(d); } catch (e) {} });
+}
+window.addEventListener('resize', resizeCharts);
 
 // Clicking a citation chip scrolls to its source; a chart link to its chart; a metric chip
 // to its row.
@@ -737,6 +751,8 @@ async function ask() {
     statusEl.classList.remove('show');
     results.classList.add('show');
     results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Now that the panel is visible and the grid is laid out, fit charts to their columns.
+    requestAnimationFrame(resizeCharts);
   } catch (err) {
     statusEl.classList.remove('show');
     errorText.textContent = err.message;

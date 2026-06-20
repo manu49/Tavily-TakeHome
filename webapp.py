@@ -416,6 +416,23 @@ PAGE = r"""<!DOCTYPE html>
   .chart { width: 100%; height: 360px; margin: 6px 0 18px; }
   .chart .cap { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
   .chart.target { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+
+  /* portfolio dashboard layout: Overview | Charts | Metrics side by side */
+  .trio { display: block; }
+  body.wide .wrap { max-width: 1360px; }
+  .results.portfolio .trio {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.55fr) minmax(0, 1fr);
+    gap: 18px; align-items: start;
+  }
+  .results.portfolio .trio .card { margin-bottom: 0; }
+  /* overview made smaller: narrower column + compact, scrollable body */
+  .results.portfolio .answer { font-size: 15px; line-height: 1.6; max-height: 72vh; overflow-y: auto; }
+  .results.portfolio .answer h1, .results.portfolio .answer h2, .results.portfolio .answer h3 { font-size: 16px; }
+  @media (max-width: 1024px) {
+    .results.portfolio .trio { grid-template-columns: 1fr; }  /* stack on narrow screens */
+    body.wide .wrap { max-width: 880px; }
+  }
 </style>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -456,17 +473,19 @@ PAGE = r"""<!DOCTYPE html>
     <div class="status" id="status"><span class="spinner"></span><span id="statusText">Searching the web and grounding the answer…</span></div>
 
     <div class="results" id="results">
-      <div class="card">
-        <h2>Answer</h2>
-        <div class="answer" id="answer"></div>
-      </div>
-      <div class="card hidden" id="chartsCard">
-        <h2>Charts</h2>
-        <div id="charts"></div>
-      </div>
-      <div class="card hidden" id="metricsCard">
-        <h2>Metrics</h2>
-        <table class="metrics"><tbody id="metrics"></tbody></table>
+      <div class="trio">
+        <div class="card">
+          <h2 id="answerHead">Answer</h2>
+          <div class="answer" id="answer"></div>
+        </div>
+        <div class="card hidden" id="chartsCard">
+          <h2>Charts</h2>
+          <div id="charts"></div>
+        </div>
+        <div class="card hidden" id="metricsCard">
+          <h2>Metrics</h2>
+          <table class="metrics"><tbody id="metrics"></tbody></table>
+        </div>
       </div>
       <div class="card" id="sourcesCard">
         <h2>Sources</h2>
@@ -691,6 +710,12 @@ async function ask() {
     answerEl.innerHTML = renderMarkdown(data.answer);
     renderCharts(data.charts);
     renderSources(data.sources, data.cited_source_ids);
+
+    // Switch to the wide 3-column dashboard layout for portfolio results.
+    const isPortfolioResult = !!((data.metrics && data.metrics.length) || (data.charts && data.charts.length));
+    results.classList.toggle('portfolio', isPortfolioResult);
+    document.body.classList.toggle('wide', isPortfolioResult);
+    document.getElementById('answerHead').textContent = isPortfolioResult ? 'Overview' : 'Answer';
 
     if (data.validation.valid) {
       vbadge.className = 'vbadge ok';

@@ -4,8 +4,8 @@ quant.py — the deterministic quantitative engine for portfolio analysis.
 This is the *code-owned* core from the design doc: every number a portfolio manager sees
 (Sharpe, VaR, drawdown, beta, ...) is computed here, by formula, over real price data. The
 LLM never produces these values; it only decides what to compute and explains the result.
-Keeping this module pure (NumPy/pandas/SciPy in, plain floats/dataclasses out — no network,
-no LLM, no global state) is what makes it exhaustively unit-testable against known answers.
+Keeping this module pure (NumPy/pandas in, plain floats/dataclasses out — no network, no
+LLM, no global state) is what makes it exhaustively unit-testable against known answers.
 
 Conventions (stated once, applied everywhere):
   * Returns are simple (arithmetic) unless a function says "log".
@@ -23,12 +23,55 @@ Conventions (stated once, applied everywhere):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, Literal, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
+
+# Standard-normal inverse-CDF and PDF, implemented in-house so the whole engine depends only
+# on numpy/pandas -- no scipy. Dropping scipy (~100 MB unzipped) is what keeps the portfolio
+# stack inside Vercel's serverless bundle limit. _norm_ppf is Acklam's rational approximation
+# (max abs error ~1.15e-9 across (0,1)), which is well within the tolerance any risk metric
+# needs.
+_ACKLAM_A = (-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
+             1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00)
+_ACKLAM_B = (-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
+             6.680131188771972e01, -1.328068155288572e01)
+_ACKLAM_C = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
+             -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00)
+_ACKLAM_D = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
+             3.754408661907416e00)
+
+
+def _norm_ppf(p: float) -> float:
+    """Inverse standard-normal CDF Φ⁻¹(p) for 0 < p < 1 (Acklam's approximation)."""
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"_norm_ppf requires 0 < p < 1, got {p}")
+    plow, phigh = 0.02425, 1 - 0.02425
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((_ACKLAM_C[0] * q + _ACKLAM_C[1]) * q + _ACKLAM_C[2]) * q + _ACKLAM_C[3]) * q
+                 + _ACKLAM_C[4]) * q + _ACKLAM_C[5]) / (
+            (((_ACKLAM_D[0] * q + _ACKLAM_D[1]) * q + _ACKLAM_D[2]) * q + _ACKLAM_D[3]) * q + 1)
+    if p <= phigh:
+        q = p - 0.5
+        r = q * q
+        return (((((_ACKLAM_A[0] * r + _ACKLAM_A[1]) * r + _ACKLAM_A[2]) * r + _ACKLAM_A[3]) * r
+                 + _ACKLAM_A[4]) * r + _ACKLAM_A[5]) * q / (
+            ((((_ACKLAM_B[0] * r + _ACKLAM_B[1]) * r + _ACKLAM_B[2]) * r + _ACKLAM_B[3]) * r
+             + _ACKLAM_B[4]) * r + 1)
+    q = math.sqrt(-2 * math.log(1 - p))
+    return -(((((_ACKLAM_C[0] * q + _ACKLAM_C[1]) * q + _ACKLAM_C[2]) * q + _ACKLAM_C[3]) * q
+              + _ACKLAM_C[4]) * q + _ACKLAM_C[5]) / (
+        (((_ACKLAM_D[0] * q + _ACKLAM_D[1]) * q + _ACKLAM_D[2]) * q + _ACKLAM_D[3]) * q + 1)
+
+
+def _norm_pdf(x: float) -> float:
+    """Standard-normal density φ(x)."""
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
 
 TRADING_DAYS = 252
 PERIODS_PER_YEAR: Dict[str, int] = {"1d": 252, "1wk": 52, "1mo": 12}
@@ -203,7 +246,7 @@ def parametric_var(
     if r.size < 2:
         return float("nan")
     mu, sigma = float(np.mean(r)), float(np.std(r, ddof=1))
-    z = norm.ppf(confidence)
+    z = _norm_ppf(confidence)
     return max(0.0, z * sigma * np.sqrt(horizon) - mu * horizon)
 
 
@@ -276,7 +319,7 @@ def parametric_cvar(
         return float("nan")
     mu, sigma = float(np.mean(r)), float(np.std(r, ddof=1))
     alpha = 1.0 - confidence
-    es_factor = norm.pdf(norm.ppf(confidence)) / alpha
+    es_factor = _norm_pdf(_norm_ppf(confidence)) / alpha
     return max(0.0, es_factor * sigma * np.sqrt(horizon) - mu * horizon)
 
 

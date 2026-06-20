@@ -2,7 +2,7 @@
 portfolio_tool.py — the `analyze_portfolio` LangChain tool.
 
 This is the agent-facing wrapper around the deterministic quant engine. It is the heavy
-tier (imports quant/marketdata, hence numpy/pandas/scipy/yfinance from the `portfolio`
+tier (imports quant/marketdata, hence numpy/pandas/yfinance from the `portfolio`
 extra) and is imported lazily by tavily_maxer.build_agent only when portfolio analysis is
 enabled, so the research-only path and the Vercel deploy never pay for it.
 

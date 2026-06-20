@@ -57,6 +57,8 @@ Sources panel. Try the sample question in [`Demo/research.txt`](Demo/research.tx
 Paste it into the box, hit **Search**, and click any `[n]` citation chip to jump to its
 source.
 
+![Research result: a grounded answer with a numbered Sources panel and an "all citations verified" validation badge](Demo/research_result.png)
+
 ### 2. Portfolio mode
 
 Switch to **Portfolio**, upload [`Demo/AAPL_SPCX.csv`](Demo/AAPL_SPCX.csv) (a holdings file
@@ -67,6 +69,8 @@ enter a prompt like:
 
 You get code-computed headline metrics (return, volatility, Sharpe), interactive charts, and
 a validation badge confirming every number was computed — not estimated by the model.
+
+![Portfolio result: cumulative performance, drawdown, and return-distribution charts beside a metrics panel (return, volatility, Sharpe, Sortino, max drawdown, VaR/CVaR)](Demo/portfolio_result.png)
 
 ### 3. Voice input (optional)
 

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 import marketdata
 import quant
 from artifacts import ChartRegistry, MetricRegistry
+from portfolio import Portfolio
 
 
 class PortfolioAnalysisInput(BaseModel):
@@ -198,4 +199,53 @@ def build_portfolio_tool(price_source: Any = None) -> PortfolioAnalysisTool:
     tool = PortfolioAnalysisTool()
     if price_source is not None:
         tool.set_price_source(price_source)
+    return tool
+
+
+class _NoArgs(BaseModel):
+    pass
+
+
+class GetPortfolioTool(BaseTool):
+    """Expose the user's uploaded portfolio so the agent can analyze "my portfolio" without
+    the holdings being retyped. Returns tickers and weights (or quantities); the agent then
+    passes them to analyze_portfolio."""
+
+    name: str = "get_uploaded_portfolio"
+    description: str = (
+        "Return the user's uploaded portfolio holdings (tickers and weights/quantities). "
+        "Call this first for any question about 'my portfolio' or 'my holdings', then pass "
+        "the tickers and weights to analyze_portfolio."
+    )
+    args_schema: type[BaseModel] = _NoArgs
+
+    _portfolio: Optional[Portfolio] = PrivateAttr(default=None)
+
+    def _run(self, run_manager: Optional[CallbackManagerForToolRun] = None, **kwargs: Any) -> str:
+        p = self._portfolio
+        if p is None or not p.holdings:
+            return "No portfolio has been uploaded for this session."
+        lines = [f"Uploaded portfolio: {p.name} (from {p.source_filename or 'upload'}), {p.currency}."]
+        weights = p.normalized_weights()
+        lines.append("Holdings:")
+        for h in p.holdings:
+            if weights is not None:
+                lines.append(f"  {h.ticker}: weight {weights[h.ticker] * 100:.1f}%")
+            elif h.quantity is not None:
+                lines.append(f"  {h.ticker}: quantity {h.quantity:g}")
+            else:
+                lines.append(f"  {h.ticker}")
+        if weights is None and p.has_quantities():
+            lines.append("(weights to be derived from quantities and live prices by analyze_portfolio)")
+        lines.append(
+            "\nNow call analyze_portfolio with these tickers"
+            + (" and weights" if weights is not None else "")
+            + " to compute risk/return metrics and charts."
+        )
+        return "\n".join(lines)
+
+
+def build_get_portfolio_tool(portfolio: Portfolio) -> GetPortfolioTool:
+    tool = GetPortfolioTool()
+    tool._portfolio = portfolio
     return tool

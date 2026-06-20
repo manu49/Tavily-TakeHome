@@ -11,7 +11,8 @@ import pandas as pd
 import pytest
 
 import tavily_maxer as tm
-from portfolio_tool import build_portfolio_tool
+from portfolio import Holding, Portfolio
+from portfolio_tool import build_get_portfolio_tool, build_portfolio_tool
 
 METRIC_RE = re.compile(r"\[metric:(\d+)\]")
 
@@ -128,3 +129,22 @@ class TestToolValidationWiring:
         result = tm.validate_citations(answer, tm.SourceRegistry())
         assert not result.valid
         assert 1 in result.missing_metric_ids
+
+
+class TestGetPortfolioTool:
+    def test_returns_holdings_with_weights(self):
+        p = Portfolio([Holding("AAPL", weight=0.6), Holding("MSFT", weight=0.4)], source_filename="p.csv")
+        out = build_get_portfolio_tool(p)._run()
+        assert "AAPL: weight 60.0%" in out
+        assert "MSFT: weight 40.0%" in out
+        assert "analyze_portfolio" in out
+
+    def test_quantity_portfolio_notes_derived_weights(self):
+        p = Portfolio([Holding("AAPL", quantity=10), Holding("MSFT", quantity=5)])
+        out = build_get_portfolio_tool(p)._run()
+        assert "quantity 10" in out
+        assert "derived" in out
+
+    def test_no_portfolio_message(self):
+        from portfolio_tool import GetPortfolioTool
+        assert "No portfolio" in GetPortfolioTool()._run()

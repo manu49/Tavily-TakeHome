@@ -561,6 +561,10 @@ def coerce_research_answer(messages: List[Any]) -> Optional[ResearchAnswer]:
 
 PORTFOLIO_PROMPT_SUFFIX = """
 
+If the user asks about "my portfolio" or "my holdings", first call `get_uploaded_portfolio`
+(when available) to retrieve their tickers and weights, then pass those to
+`analyze_portfolio`.
+
 You also have an `analyze_portfolio` tool for quantitative portfolio questions (risk/return
 metrics for a set of tickers and weights). When a question calls for it:
 - Call `analyze_portfolio` instead of computing any numbers yourself. It returns metrics
@@ -577,7 +581,11 @@ metrics for a set of tickers and weights). When a question calls for it:
 
 
 def build_agent(
-    model: str = DEFAULT_MODEL, *, streaming: bool = True, enable_portfolio: bool = False
+    model: str = DEFAULT_MODEL,
+    *,
+    streaming: bool = True,
+    enable_portfolio: bool = False,
+    portfolio: Optional[Any] = None,
 ):
     """Build a fresh agent and its (fresh) tool instances. New tools are returned each call
     so their registries start empty -- artifact ids must not leak across unrelated runs.
@@ -585,7 +593,8 @@ def build_agent(
     Returns (agent, search_tool, portfolio_tool). `portfolio_tool` is None unless
     `enable_portfolio` is set; when set, the heavy quant stack (quant/marketdata via the
     `portfolio` extra) is imported lazily so the research-only path and the Vercel deploy
-    never pay for it.
+    never pay for it. If a parsed `portfolio` is supplied, a get_uploaded_portfolio tool is
+    added so the agent can analyze "my portfolio".
     """
     chat_model = FixedChatNebius(model=model, streaming=streaming)
     search_tool = TavilySearchWithRegistry()
@@ -594,10 +603,12 @@ def build_agent(
     system_prompt = SYSTEM_PROMPT
 
     if enable_portfolio:
-        from portfolio_tool import PortfolioAnalysisTool
+        from portfolio_tool import PortfolioAnalysisTool, build_get_portfolio_tool
 
         portfolio_tool = PortfolioAnalysisTool()
         tools.append(portfolio_tool)
+        if portfolio is not None:
+            tools.append(build_get_portfolio_tool(portfolio))
         system_prompt = SYSTEM_PROMPT + PORTFOLIO_PROMPT_SUFFIX
 
     agent = create_agent(
@@ -717,6 +728,7 @@ def run_query(
     repair_attempts: int = 2,
     enable_portfolio: bool = False,
     portfolio_tool=None,
+    portfolio: Optional[Any] = None,
 ) -> RunResult:
     """Run one question through the agent end-to-end (no console streaming) and return
     a structured RunResult. This is the path used by the eval/dataset script and by
@@ -728,7 +740,7 @@ def run_query(
     they don't pollute logs/runs.jsonl)."""
     if agent is None or search_tool is None:
         agent, search_tool, portfolio_tool = build_agent(
-            model=model, streaming=False, enable_portfolio=enable_portfolio
+            model=model, streaming=False, enable_portfolio=enable_portfolio, portfolio=portfolio
         )
 
     metric_registry = portfolio_tool.registry if portfolio_tool is not None else None

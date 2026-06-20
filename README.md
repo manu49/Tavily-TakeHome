@@ -4,6 +4,8 @@
 
 ## Demo
 
+![The Tavily Maxer web app on Vercel, with the Research / Portfolio mode toggle](Demo/v2_both_modes.png)
+
 <video src="https://github.com/manu49/Tavily-TakeHome/raw/main/Demo/v3_Tavily_Maxer.mp4" controls width="100%"></video>
 
 > If the player doesn't load inline, [watch/download the demo video](Demo/v3_Tavily_Maxer.mp4).
